@@ -211,29 +211,49 @@ class RunSyncTests(StoreTestCase):
 
 
 class CreateAppTests(unittest.TestCase):
-    def test_creates_app_then_generates_credentials(self):
-        replies = [(200, {"appId": "app-1"}), (200, {"oauthClientId": "cid", "oauthClientSecret": "sec"})]
-        with mock.patch.object(punctual, "http", side_effect=replies) as fake:
+    def test_reads_credentials_from_the_create_reply(self):
+        reply = (200, {"app": {"appId": "app-1"}, "oauthClientId": "cid", "oauthClientSecret": "sec"})
+        with mock.patch.object(punctual, "http", return_value=reply) as fake:
             self.assertEqual(punctual.create_oauth_app(" token "), ("cid", "sec"))
-        first, second = fake.call_args_list
-        self.assertEqual(first[0], ("POST", f"{punctual.API_URL}/apps"))
-        self.assertEqual(first[1]["headers"]["Authorization"], "Bearer token")
-        self.assertEqual(second[0], ("POST", f"{punctual.API_URL}/apps/app-1/oauth/generate"))
-        body = json.loads(second[1]["body"])
-        self.assertEqual(body["scope"], ["r:devices:*", "x:devices:*"])
-        self.assertEqual(body["redirectUris"], [punctual.DEFAULT_REDIRECT_URI])
+        self.assertEqual(fake.call_count, 1)
+        (method, url), kwargs = fake.call_args
+        self.assertEqual((method, url), ("POST", f"{punctual.API_URL}/apps"))
+        self.assertEqual(kwargs["headers"]["Authorization"], "Bearer token")
+        body = json.loads(kwargs["body"])
+        self.assertEqual(body["oauth"]["scope"], ["r:devices:*", "x:devices:*"])
+        self.assertEqual(body["oauth"]["redirectUris"], [punctual.DEFAULT_REDIRECT_URI])
+
+    def test_asks_separately_when_the_reply_has_no_credentials(self):
+        replies = [(200, {"app": {"appId": "app-1"}}),
+                   (200, {"oauthClientId": "cid", "oauthClientSecret": "sec"})]
+        with mock.patch.object(punctual, "http", side_effect=replies) as fake:
+            self.assertEqual(punctual.create_oauth_app("token"), ("cid", "sec"))
+        self.assertEqual(fake.call_args[0], ("POST", f"{punctual.API_URL}/apps/app-1/oauth/generate"))
+
+    def test_flat_reply_shape_is_also_accepted(self):
+        reply = (200, {"appId": "app-1", "oauthClientId": "cid", "oauthClientSecret": "sec"})
+        with mock.patch.object(punctual, "http", return_value=reply):
+            self.assertEqual(punctual.create_oauth_app("token"), ("cid", "sec"))
 
     def test_rejected_token_explains(self):
         with mock.patch.object(punctual, "http", return_value=(403, {"error": "forbidden"})):
             with self.assertRaises(punctual.PunctualError) as ctx:
                 punctual.create_oauth_app("token")
         self.assertIn("403", str(ctx.exception))
+        self.assertIn("token", str(ctx.exception))
 
-    def test_missing_credentials_in_response(self):
-        replies = [(200, {"appId": "app-1"}), (200, {})]
-        with mock.patch.object(punctual, "http", side_effect=replies):
+    def test_unexpected_reply_is_not_blamed_on_the_token(self):
+        with mock.patch.object(punctual, "http", return_value=(200, {"surprise": True})):
+            with self.assertRaises(punctual.PunctualError) as ctx:
+                punctual.create_oauth_app("token")
+        self.assertNotIn("did not accept that token", str(ctx.exception))
+
+    def test_half_made_app_is_removed_when_credentials_are_missing(self):
+        replies = [(200, {"app": {"appId": "app-1"}}), (200, {}), (200, {})]
+        with mock.patch.object(punctual, "http", side_effect=replies) as fake:
             with self.assertRaises(punctual.PunctualError):
                 punctual.create_oauth_app("token")
+        self.assertEqual(fake.call_args[0], ("DELETE", f"{punctual.API_URL}/apps/app-1"))
 
 
 class AuthorizeTests(StoreTestCase):
