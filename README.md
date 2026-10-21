@@ -23,19 +23,29 @@ Scheduler.
 - Tokens are stored per-user, outside the repo, and encrypted with Windows
   DPAPI on Windows (owner-only file permissions elsewhere).
 
-## Two ways to use it
+## Three ways to use it
 
-| | Files to download | Needs |
+| | What you get | Needs |
 |---|---|---|
-| **Window** (point and click) | `punctual.py` **and** `punctual_gui.py` | Python 3.9+ with Tkinter |
-| **Script only** (terminal, servers, cron) | just `punctual.py` | Python 3.9+ |
+| **Installer** (easiest) | Download from the [Releases page](https://github.com/gerp93/SoSmartButNeverPunctual/releases): `SoSmartButNeverPunctual-windows-Setup.exe` (Start Menu shortcut, uninstaller), or the portable `-windows.exe`, `-macos` or `-linux` build | Nothing else. Python is bundled |
+| **Window from source** | `python punctual_gui.py` | Python 3.9+ with Tkinter. For the theme and update check: `pip install -r requirements.txt` |
+| **Script only** (terminal, servers, cron) | Download just `punctual.py` | Python 3.9+, nothing else |
 
-Both do the same thing and share the same saved login and settings, so you
-can switch between them. `punctual.py` never needs the window file.
+All three do the same thing and share the same saved login and settings, so you
+can switch between them. `punctual.py` never needs the window files.
 
-**Window:** run `python punctual_gui.py` (on Windows, double-click it). It has
-four boxes: log in, tick your appliances, "Sync clocks now", and a daily schedule
-switch. Tkinter comes with Python on Windows and macOS. On Linux install it first:
+The builds are unsigned, so Windows SmartScreen and macOS Gatekeeper warn about an
+unrecognized publisher on first run. Click through ("More info", then "Run anyway" on
+Windows; right-click, then "Open" on macOS). On macOS and Linux, make the download
+executable first (`chmod +x`).
+
+**The window** has four boxes: log in, tick your appliances, "Sync clocks now", and a
+daily-schedule switch. It uses a [VisualAssault](https://github.com/gerp93/VisualAssault)
+color theme (pick another, or "System Default", from the Theme menu) and checks for updates
+on start. The installed app is also the scheduled job: the daily task runs the same program
+with `sync`, with no window.
+
+On Linux, Tkinter is a separate package when running from source:
 
 ```
 sudo apt install python3-tk        # Debian, Ubuntu, Raspberry Pi OS
@@ -235,10 +245,10 @@ window on top of it. Tests are in `tests/`.
 ## Standards
 
 This repo follows [KVG_Standards](https://github.com/gerp93/KVG_Standards).
-It is a script with a small optional window, not a packaged desktop app, so the
-desktop-app parts (VisualAssault theme, installer, update-check, logo) are not
-done yet; see `TODO.md`. It does follow the license, `TODO.md` and pull-request
-conventions.
+It is a Python/PyInstaller desktop app (Tkinter window) with a headless script engine:
+the VisualAssault theme (pinned `v0.3.0`), `kvg_updater` update check, logo and icons
+(`scripts/`), `auto-release.yml` + `cut-release.yml` calling `release-python-gui.yml`
+(which also builds the Windows `Setup.exe`), `VERSION_BUMP.md`, AGPL-3.0 and `TODO.md`.
 
 ## License
 

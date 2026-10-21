@@ -1,0 +1,2 @@
+# Only for regenerating the logo/icons (scripts/). Not needed to run or build the app.
+Pillow>=10.0.0

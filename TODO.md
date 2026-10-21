@@ -6,15 +6,19 @@ and this repo's `REPO_SCOPE.md` entry for that). Just what's not built yet.
 
 ## Features
 
-- Window: apply the VisualAssault Tkinter theme (pinned to a tag), and give it a logo.
-  Decide with the owner whether it becomes a packaged desktop app (PyInstaller
-  `release-python-gui.yml`, Windows installer, `kvg_updater`) or stays a downloadable
-  script plus window; the KVG desktop-app requirements follow from that choice.
 - Window: a paste box for non-localhost redirect URIs (the terminal already has one).
 - Window and script: a "last run failed" notice when the scheduled task could not log in.
-- Decide a release/CI shape for a plain script. None of KVG_Standards' categories
-  covers a CLI utility, so this needs approval first (a tag-only release? a
-  Python test workflow?). Until then there is no release pipeline or CI.
+- Add a CI workflow that runs the unit tests on push/PR (Python, Windows + Linux).
+  KVG_Standards has no shared Python CI yet, so this needs its design approved first;
+  until then nothing runs the tests automatically.
+- The Windows installer is `perMachine` (Program Files), but the self-updater rewrites
+  its own exe, which an unelevated process can't do there. `release-python-gui.yml`
+  doesn't expose the installer action's `install_scope: perUser` yet; that is a change
+  to KVG_Standards. Until then, in-app updates on a Program Files install need admin.
+- Pin `kvg-updater` to a KVG_Standards tag once one exists (currently `@main`, the
+  documented interim exception).
+- The logo (`assets/logo.png`, drawn by `scripts/draw_logo.py`) is a placeholder; replace
+  it with any square image and run `scripts/generate_icons.py`.
 - Optional `--timezone` (IANA name) instead of only local/UTC.
 - Optional notification when a run fails (webhook or email), beyond the exit code.
 - Fetch the device list through the refreshed token once in `sync` and
@@ -26,6 +30,9 @@ and this repo's `REPO_SCOPE.md` entry for that). Just what's not built yet.
 
 ## Needs real-world verification
 
+- The first real release build: PyInstaller exe on all three OSes, the Windows `Setup.exe`,
+  the update check against a published release, and the scheduled task running the packaged
+  exe (`SoSmartButNeverPunctual.exe sync`) with no window.
 - `setup --token` / the window's Connect shortcut: it calls `POST /apps` and
   `POST /apps/{id}/oauth/generate` with a personal access token. Unconfirmed that
   SmartThings allows this and which token permissions it needs.

@@ -1,0 +1,6 @@
+# Needed only for the window (punctual_gui.py) and the packaged app. The headless
+# script, punctual.py, has no dependencies. Both are pinned per KVG_Standards.
+visual-assault-tkinter @ git+https://github.com/gerp93/VisualAssault.git@v0.3.0#subdirectory=packages/tkinter
+# KVG_Standards has no tagged release yet, so the updater is pinned to @main for now
+# (the documented interim exception in update-check-versioning.md). Move to a tag once one exists.
+kvg-updater @ git+https://github.com/gerp93/KVG_Standards.git@main#subdirectory=packages/python/kvg_updater
