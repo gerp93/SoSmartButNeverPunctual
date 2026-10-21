@@ -11,10 +11,11 @@ and this repo's `REPO_SCOPE.md` entry for that). Just what's not built yet.
 - Add a CI workflow that runs the unit tests on push/PR (Python, Windows + Linux).
   KVG_Standards has no shared Python CI yet, so this needs its design approved first;
   until then nothing runs the tests automatically.
-- The Windows installer is `perMachine` (Program Files), but the self-updater rewrites
-  its own exe, which an unelevated process can't do there. `release-python-gui.yml`
-  doesn't expose the installer action's `install_scope: perUser` yet; that is a change
-  to KVG_Standards. Until then, in-app updates on a Program Files install need admin.
+- Decided (owner): the Windows installer stays `perMachine` (Program Files, installed as
+  admin). The in-app update button rewrites the installed exe, so it only works when the app
+  is started as administrator; otherwise update by running the new `Setup.exe`. If this
+  becomes annoying, `release-python-gui.yml` in KVG_Standards would need to expose the
+  installer action's `install_scope: perUser`.
 - Pin `kvg-updater` to a KVG_Standards tag once one exists (currently `@main`, the
   documented interim exception).
 - The logo (`assets/logo.png`, drawn by `scripts/draw_logo.py`) is a placeholder; replace
