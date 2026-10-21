@@ -23,6 +23,24 @@ Scheduler.
 - Tokens are stored per-user, outside the repo, and encrypted with Windows
   DPAPI on Windows (owner-only file permissions elsewhere).
 
+## Quick start (Windows)
+
+1. Download **`SoSmartButNeverPunctual-windows-Setup.exe`** from the
+   [Releases page](https://github.com/gerp93/SoSmartButNeverPunctual/releases/latest) and run it.
+   Windows will ask for admin permission and may show a blue "unrecognized publisher"
+   warning, because the app isn't code-signed. Click **More info**, then **Run anyway**.
+2. Open **SoSmartButNeverPunctual**. A **Connect to SmartThings** window opens by itself.
+   Follow the four steps on it: open the SmartThings token page, make a token, paste it
+   in, click Connect, then click Allow in the browser page that opens.
+3. Tick the appliances you want kept in sync (for example your range and microwave) and press
+   **Sync clocks now**. Look at the appliance display to confirm the time changed.
+4. Under **Do it every day**, pick a time and click **Turn on**. Done: the clocks are now
+   corrected every day, even after a power outage.
+
+Why the token? SmartThings has no simple "log in" for apps like this, so the app uses
+your one-time token to register itself with your SmartThings account. The token is thrown
+away right after, and the app does not keep it. Only appliances' clocks are touched.
+
 ## Three ways to use it
 
 | | What you get | Needs |
@@ -68,7 +86,7 @@ Whether it works on dishwashers, washers, dryers or fridges is untested; `select
 which devices accept the command, and you can only know for sure by trying it.
 Success from the API doesn't prove the clock changed. Look at the display.
 
-## Why OAuth and not a personal access token?
+## How it stays logged in (technical)
 
 SmartThings personal access tokens now expire after about 24 hours, so they
 can't run a daily job. SmartThings says [OAuth is the only supported method for
@@ -78,7 +96,11 @@ token for a new access token and a new refresh token, and saves both. A refresh
 token lapses after roughly 29-30 days without use, so a daily schedule keeps it
 alive. If the machine is off for a month, run `setup` again.
 
-## Setup
+## Advanced: use your own SmartThings app
+
+Most people never need this section: the window's Connect screen and `setup --token`
+do it for you. This is for scripts on a server, or if you'd rather create the SmartThings
+app yourself and enter its Client ID and secret.
 
 ### 1. Create your own SmartThings OAuth-In app (once)
 

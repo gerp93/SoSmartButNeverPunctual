@@ -37,7 +37,7 @@ except ImportError:
 
 TITLE = "SoSmartButNeverPunctual"
 TOKENS_URL = "https://account.smartthings.com/tokens"
-README_URL = "https://github.com/gerp93/SoSmartButNeverPunctual#setup"
+README_URL = "https://github.com/gerp93/SoSmartButNeverPunctual#advanced-use-your-own-smartthings-app"
 
 
 def resource_path(relative: str) -> Path:
@@ -131,6 +131,8 @@ class App:
         self.refresh_state()
         self.pump()
         self.root.after(1500, self.check_for_updates)
+        if not self.store.load_state_safe():
+            self.root.after(500, self.open_connect)  # first run: start the setup right away
         if self.store.load_state_safe():
             self.refresh_devices()
 
@@ -251,7 +253,7 @@ class App:
     def refresh_state(self) -> None:
         try:
             connected = bool(self.store.load_state())
-            self.connection_text.set("Connected to SmartThings." if connected else "Not connected yet.")
+            self.connection_text.set("Connected to SmartThings." if connected else "Not connected yet. Click Connect to start.")
         except punctual.PunctualError as exc:
             self.connection_text.set(f"Problem with saved login: {exc}")
         config = self.store.load_config()
@@ -270,59 +272,81 @@ class App:
         win.title("Connect to SmartThings")
         win.configure(background=theming.background())
         win.transient(self.root)
-        body = ttk.Frame(win, padding=12)
+        body = ttk.Frame(win, padding=14)
         body.pack(fill="both", expand=True)
+        wrap = 470
 
-        easy = ttk.LabelFrame(body, text="Easiest: let this app create its own SmartThings app", padding=8)
-        easy.pack(fill="x", pady=4)
-        ttk.Label(easy, wraplength=440, justify="left", text=(
-            "1. Open the token page, sign in, and create a token (any name). Tick the permissions for "
-            "Apps and Devices.\n2. Paste the token below. It is used once to set things up and is never saved."
-        )).pack(anchor="w")
-        ttk.Button(easy, text="Open the token page", command=lambda: webbrowser.open(TOKENS_URL)).pack(anchor="w", pady=4)
+        ttk.Label(body, wraplength=wrap, justify="left", font=("TkDefaultFont", 10, "bold"), text=(
+            "This app needs your permission to set the clocks on your appliances. "
+            "You do two quick things on the SmartThings website:")).pack(anchor="w")
+        ttk.Label(body, wraplength=wrap, justify="left", text=(
+            "1.  Click the button below. Sign in with your Samsung account.\n\n"
+            "2.  Click \"Generate new token\". Give it any name (for example: clock). Tick the boxes "
+            "for Devices and Apps (if you are not sure, tick everything). Click \"Generate token\".\n\n"
+            "3.  Copy the token it shows (you only see it once) and paste it in the box below.\n\n"
+            "4.  Click Connect. Your web browser opens a SmartThings page asking you to allow access. "
+            "Click Allow, then come back here.")).pack(anchor="w", pady=8)
+        ttk.Button(body, text="Open the SmartThings token page", command=lambda: webbrowser.open(TOKENS_URL)).pack(anchor="w")
+        ttk.Label(body, text="Paste the token here:").pack(anchor="w", pady=(10, 0))
         token_var = tk.StringVar()
-        ttk.Entry(easy, textvariable=token_var, show="*", width=52).pack(anchor="w")
+        ttk.Entry(body, textvariable=token_var, show="*", width=58).pack(anchor="w")
+        ttk.Label(body, text="The token is only used once, to set things up. It is not saved.").pack(anchor="w", pady=(2, 0))
 
-        manual = ttk.LabelFrame(body, text="Or: you already made a SmartThings OAuth-In app", padding=8)
-        manual.pack(fill="x", pady=4)
+        # Advanced: for people who already have their own SmartThings app (client ID + secret)
+        advanced = ttk.Frame(body)
         id_var, secret_var = tk.StringVar(), tk.StringVar()
-        ttk.Label(manual, text="Client ID").pack(anchor="w")
-        ttk.Entry(manual, textvariable=id_var, width=52).pack(anchor="w")
-        ttk.Label(manual, text="Client secret").pack(anchor="w")
-        ttk.Entry(manual, textvariable=secret_var, show="*", width=52).pack(anchor="w")
-        ttk.Button(manual, text="How to make one", command=lambda: webbrowser.open(README_URL)).pack(anchor="w", pady=4)
-
         redirect_var = tk.StringVar(value=punctual.DEFAULT_REDIRECT_URI)
-        ttk.Label(body, text="Redirect address (leave as is):").pack(anchor="w", pady=(6, 0))
-        ttk.Entry(body, textvariable=redirect_var, width=52).pack(anchor="w")
+        ttk.Label(advanced, text="Client ID").pack(anchor="w")
+        ttk.Entry(advanced, textvariable=id_var, width=58).pack(anchor="w")
+        ttk.Label(advanced, text="Client secret").pack(anchor="w")
+        ttk.Entry(advanced, textvariable=secret_var, show="*", width=58).pack(anchor="w")
+        ttk.Label(advanced, text="Redirect address (leave as is)").pack(anchor="w")
+        ttk.Entry(advanced, textvariable=redirect_var, width=58).pack(anchor="w")
+        ttk.Button(advanced, text="Instructions for making your own app",
+                   command=lambda: webbrowser.open(README_URL)).pack(anchor="w", pady=4)
+
+        def toggle_advanced():
+            if advanced.winfo_ismapped():
+                advanced.pack_forget()
+                toggle.configure(text="Advanced: I already have a Client ID and secret  >")
+            else:
+                advanced.pack(anchor="w", pady=4, before=buttons)
+                toggle.configure(text="Advanced: I already have a Client ID and secret  v")
+
+        toggle = ttk.Button(body, text="Advanced: I already have a Client ID and secret  >", command=toggle_advanced)
+        toggle.pack(anchor="w", pady=(12, 0))
+        buttons = ttk.Frame(body)
+        buttons.pack(fill="x", pady=(10, 0))
 
         def go():
             token, client_id, secret = token_var.get().strip(), id_var.get().strip(), secret_var.get().strip()
             redirect = redirect_var.get().strip()
             if not token and not (client_id and secret):
-                messagebox.showinfo(TITLE, "Paste a token, or fill in the client ID and secret.", parent=win)
+                messagebox.showinfo(TITLE, "Paste the token from the SmartThings website into the box first.", parent=win)
                 return
             if not punctual.is_loopback_redirect(redirect):
                 messagebox.showinfo(TITLE, "The redirect address must look like http://localhost:8123/callback "
                                            "(the window version needs a localhost address).", parent=win)
                 return
             win.destroy()
-            self.write_log("Connecting... your browser will open so you can approve access.")
+            self.write_log("Connecting... your web browser will open so you can allow access.")
 
             def work():
                 cid, sec = (punctual.create_oauth_app(token, redirect) if token else (client_id, secret))
                 if token:
-                    punctual.log("Created your SmartThings app.")
+                    punctual.log("Set up your SmartThings access.")
                 punctual.authorize(self.store, cid, sec, redirect)
 
             def done(_):
                 self.refresh_state()
-                messagebox.showinfo(TITLE, "Connected. Now pick your appliances.")
+                messagebox.showinfo(TITLE, "Connected.\n\nNext: tick the appliances you want kept in sync, "
+                                           "then press \"Sync clocks now\" and check their displays.")
                 self.refresh_devices()
 
             self.background(work, done)
 
-        ttk.Button(body, text="Connect", command=go).pack(anchor="e", pady=(10, 0))
+        ttk.Button(buttons, text="Connect", command=go).pack(side="right")
+        ttk.Button(buttons, text="Cancel", command=win.destroy).pack(side="right", padx=6)
 
     # ----- 2. appliances --------------------------------------------------
 
