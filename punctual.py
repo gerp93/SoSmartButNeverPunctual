@@ -725,7 +725,7 @@ def sync_command_line(store: Store, default_dir: bool, jitter: int) -> list:
         args = [python, str(Path(__file__).resolve())]
     if not default_dir:
         args += ["--config-dir", str(store.dir)]
-    return args + ["sync", "--jitter", str(jitter)]
+    return args + ["sync"] + (["--jitter", str(jitter)] if jitter else [])
 
 
 def _run(command: list):
@@ -739,7 +739,7 @@ def schedule_exists() -> bool:
     return bool(listing and listing.returncode == 0 and CRON_MARKER in listing.stdout)
 
 
-def schedule_install(store: Store, at: str = "03:17", jitter: int = 20, task_name: str = TASK_NAME) -> None:
+def schedule_install(store: Store, at: str = "03:17", jitter: int = 0, task_name: str = TASK_NAME) -> None:
     hour, minute = parse_time(at)
     command = sync_command_line(store, default_dir=(store.dir == config_dir()), jitter=jitter)
     if sys.platform == "win32":
@@ -855,7 +855,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     schedule = sub.add_parser("schedule", help="run sync every day (Task Scheduler on Windows, crontab elsewhere)")
     schedule.add_argument("--at", default="03:17", metavar="HH:MM", help="24-hour time (default 03:17)")
-    schedule.add_argument("--jitter", type=int, default=20, metavar="MINUTES", help="random delay (default 20)")
+    schedule.add_argument("--jitter", type=int, default=0, metavar="MINUTES",
+                          help="wait a random 0..MINUTES after the chosen time (default 0: run at that time)")
     schedule.set_defaults(func=cmd_schedule)
     sub.add_parser("unschedule", help="remove the daily sync").set_defaults(func=cmd_unschedule)
 
