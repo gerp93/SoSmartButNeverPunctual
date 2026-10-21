@@ -45,8 +45,16 @@ except ImportError:
     __version__ = "0.0.0-dev"
 
 API_URL = "https://api.smartthings.com/v1"
-AUTHORIZE_URL = f"{API_URL}/oauth/authorize"
-TOKEN_URL = f"{API_URL}/oauth/token"
+# The browser sign-in page is served from the "oauthin" host (api.smartthings.com answers 403 there).
+AUTHORIZE_URL = "https://oauthin-regional.api.smartthings.com/oauth/authorize"
+# SmartThings serves its token endpoint from several hosts. Its command-line tool signs in on
+# oauthin-regional and refreshes on auth-global, and the docs say api.smartthings.com/v1. We try
+# them in that order and remember the one that worked (state["token_url"]).
+_OAUTHIN_TOKEN_URL = "https://oauthin-regional.api.smartthings.com/oauth/token"
+_GLOBAL_TOKEN_URL = "https://auth-global.api.smartthings.com/oauth/token"
+_API_TOKEN_URL = f"{API_URL}/oauth/token"
+TOKEN_URLS_EXCHANGE = (_OAUTHIN_TOKEN_URL, _API_TOKEN_URL, _GLOBAL_TOKEN_URL)
+TOKEN_URLS_REFRESH = (_GLOBAL_TOKEN_URL, _API_TOKEN_URL, _OAUTHIN_TOKEN_URL)
 DEFAULT_SCOPE = "r:devices:* x:devices:*"
 
 # Undocumented, community-discovered command that sets a Samsung appliance clock.
@@ -243,40 +251,52 @@ def describe_error(payload) -> str:
     return "; ".join(parts)[:300] or "no details"
 
 
-def token_request(client_id: str, client_secret: str, form: dict) -> dict:
+def token_request(client_id: str, client_secret: str, form: dict, urls, preferred=None):
+    """POST to SmartThings' token endpoint. Returns (payload, url_that_worked).
+
+    A 400 is the endpoint understanding and refusing the request (e.g. an expired code), so we stop.
+    401/403/404/5xx may just mean this host doesn't serve this app, so we try the next address.
+    """
     basic = base64.b64encode(f"{client_id}:{client_secret}".encode()).decode()
-    status, payload = http(
-        "POST",
-        TOKEN_URL,
-        headers={
-            "Authorization": f"Basic {basic}",
-            "Content-Type": "application/x-www-form-urlencoded",
-            "Accept": "application/json",
-        },
-        body=urllib.parse.urlencode(form).encode(),
-    )
-    if status == 200 and "access_token" in payload:
-        return payload
+    ordered = ([preferred] if preferred else []) + [u for u in urls if u != preferred]
+    status, payload = 0, {}
+    for url in ordered:
+        status, payload = http(
+            "POST",
+            url,
+            headers={
+                "Authorization": f"Basic {basic}",
+                "Content-Type": "application/x-www-form-urlencoded",
+                "Accept": "application/json",
+            },
+            body=urllib.parse.urlencode(form).encode(),
+        )
+        if status == 200 and "access_token" in payload:
+            return payload, url
+        if status == 400:
+            break
     detail = describe_error(payload)
     if status in (400, 401, 403):
         raise AuthRequired(f"SmartThings rejected the login (HTTP {status}: {detail}). Run: python punctual.py setup")
     raise PunctualError(f"token request failed (HTTP {status}: {detail})")
 
 
-def apply_tokens(store: Store, state: dict, payload: dict) -> None:
+def apply_tokens(store: Store, state: dict, payload: dict, token_url=None) -> None:
     """Both tokens change on every refresh; save immediately so the new one is never lost."""
     now = time.time()
     state["access_token"] = payload["access_token"]
     state["refresh_token"] = payload.get("refresh_token") or state.get("refresh_token")
     state["expires_at"] = now + float(payload.get("expires_in", 86399))
     state["refreshed_at"] = now
+    if token_url:
+        state["token_url"] = token_url
     store.save_state(state)
 
 
 def refresh(store: Store, state: dict) -> None:
     if not state.get("refresh_token"):
         raise AuthRequired("no refresh token stored. Run: python punctual.py setup")
-    payload = token_request(
+    payload, url = token_request(
         state["client_id"],
         state["client_secret"],
         {
@@ -284,8 +304,10 @@ def refresh(store: Store, state: dict) -> None:
             "refresh_token": state["refresh_token"],
             "client_id": state["client_id"],
         },
+        TOKEN_URLS_REFRESH,
+        preferred=state.get("token_url"),
     )
-    apply_tokens(store, state, payload)
+    apply_tokens(store, state, payload, url)
     log("refreshed SmartThings login")
 
 
@@ -450,6 +472,21 @@ def create_oauth_app(token: str, redirect_uri: str = DEFAULT_REDIRECT_URI, scope
         "apiOnly": {},
         "oauth": oauth_request,
     }
+    # Retrying Connect must not pile up apps in the user's account: reuse ours if it is already there.
+    status, listing = http("GET", f"{API_URL}/apps", headers=headers)
+    existing = next((item["appId"] for item in (listing.get("items") or [])
+                     if status == 200 and isinstance(listing, dict) and item.get("appId")
+                     and item.get("displayName") == APP_DISPLAY_NAME and item.get("appType") == "API_ONLY"), None)
+    if existing:
+        status, data = http("POST", f"{API_URL}/apps/{existing}/oauth/generate", headers=headers,
+                            body=json.dumps(oauth_request).encode())
+        client_id = data.get("oauthClientId") if isinstance(data, dict) else None
+        client_secret = data.get("oauthClientSecret") if isinstance(data, dict) else None
+        if status in (200, 201) and client_id and client_secret:
+            return client_id, client_secret
+        raise PunctualError(f"your existing SmartThings app could not issue new login details "
+                            f"(HTTP {status}: {describe_error(data)}).")
+
     status, data = http("POST", f"{API_URL}/apps", headers=headers, body=json.dumps(app_request).encode())
     if status in (401, 403):
         raise PunctualError(f"SmartThings did not accept that token (HTTP {status}: {describe_error(data)}). "
@@ -522,7 +559,7 @@ def authorize(store: Store, client_id: str, client_secret: str, redirect_uri: st
     if returned_state is not None and returned_state != nonce:
         raise PunctualError("state mismatch; start setup again")
 
-    payload = token_request(
+    payload, url = token_request(
         client_id,
         client_secret,
         {
@@ -531,9 +568,10 @@ def authorize(store: Store, client_id: str, client_secret: str, redirect_uri: st
             "client_id": client_id,
             "redirect_uri": redirect_uri,
         },
+        TOKEN_URLS_EXCHANGE,
     )
     state = {"client_id": client_id, "client_secret": client_secret, "redirect_uri": redirect_uri, "scope": scope}
-    apply_tokens(store, state, payload)
+    apply_tokens(store, state, payload, url)
     notify(f"Logged in. Saved to {store.dir}")
 
 
