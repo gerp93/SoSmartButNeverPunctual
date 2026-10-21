@@ -434,10 +434,12 @@ def create_oauth_app(token: str, redirect_uri: str = DEFAULT_REDIRECT_URI, scope
     """Create the user's own OAuth-In app with a short-lived personal access token.
 
     Returns (client_id, client_secret). The token is only used for these calls and
-    is never stored. Equivalent to `smartthings apps:create`.
+    is never stored. Equivalent to `smartthings apps:create`. The token needs the
+    "w:apps" permission (the Apps boxes on the token page).
     """
     headers = {"Authorization": f"Bearer {token.strip()}", "Accept": "application/json",
                "Content-Type": "application/json"}
+    oauth_request = {"clientName": APP_DISPLAY_NAME, "scope": scope.split(), "redirectUris": [redirect_uri]}
     app_request = {
         "appName": f"sosmart-{uuid.uuid4().hex[:16]}",
         "displayName": APP_DISPLAY_NAME,
@@ -446,21 +448,30 @@ def create_oauth_app(token: str, redirect_uri: str = DEFAULT_REDIRECT_URI, scope
         "appType": "API_ONLY",
         "classifications": ["CONNECTED_SERVICE"],
         "apiOnly": {},
+        "oauth": oauth_request,
     }
     status, data = http("POST", f"{API_URL}/apps", headers=headers, body=json.dumps(app_request).encode())
-    if status not in (200, 201) or "appId" not in data:
+    if status in (401, 403):
         raise PunctualError(f"SmartThings did not accept that token (HTTP {status}: {describe_error(data)}). "
-                            "Make a new token on the token page and tick the Devices and Apps boxes. "
+                            "Make a new token on the token page and tick every box under Devices and Apps. "
                             "(Advanced: you can use your own app instead, see the README.)")
-    app_id = data["appId"]
-    oauth_request = {"clientName": APP_DISPLAY_NAME, "scope": scope.split(), "redirectUris": [redirect_uri]}
-    status, data = http("POST", f"{API_URL}/apps/{app_id}/oauth/generate", headers=headers,
-                        body=json.dumps(oauth_request).encode())
-    client_id = data.get("oauthClientId") if isinstance(data, dict) else None
-    client_secret = data.get("oauthClientSecret") if isinstance(data, dict) else None
-    if status not in (200, 201) or not client_id or not client_secret:
-        raise PunctualError(f"the app was created but its login details could not be generated "
-                            f"(HTTP {status}: {describe_error(data)}). App ID: {app_id}")
+    # The reply is {"app": {...}, "oauthClientId": ..., "oauthClientSecret": ...}
+    app = data.get("app") if isinstance(data.get("app"), dict) else data
+    app_id = app.get("appId") if isinstance(app, dict) else None
+    if status not in (200, 201) or not app_id:
+        raise PunctualError(f"SmartThings could not create the app (HTTP {status}: {describe_error(data)}).")
+
+    client_id, client_secret = data.get("oauthClientId"), data.get("oauthClientSecret")
+    if not (client_id and client_secret):  # not included in the reply: ask for them separately
+        status, data = http("POST", f"{API_URL}/apps/{app_id}/oauth/generate", headers=headers,
+                            body=json.dumps(oauth_request).encode())
+        client_id = data.get("oauthClientId") if isinstance(data, dict) else None
+        client_secret = data.get("oauthClientSecret") if isinstance(data, dict) else None
+    if not (client_id and client_secret):
+        with contextlib.suppress(PunctualError):  # don't leave a half-made app in the user's account
+            http("DELETE", f"{API_URL}/apps/{app_id}", headers=headers)
+        raise PunctualError(f"SmartThings created the app but would not give its login details "
+                            f"(HTTP {status}: {describe_error(data)}). The app was removed again; try once more.")
     return client_id, client_secret
 
 

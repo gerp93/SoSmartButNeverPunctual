@@ -285,8 +285,8 @@ class App:
             "You do two quick things on the SmartThings website:")).pack(anchor="w")
         ttk.Label(body, wraplength=wrap, justify="left", text=(
             "1.  Click the button below. Sign in with your Samsung account.\n\n"
-            "2.  Click \"Generate new token\". Give it any name (for example: clock). Tick the boxes "
-            "for Devices and Apps (if you are not sure, tick everything). Click \"Generate token\".\n\n"
+            "2.  Click \"Generate new token\". Give it any name (for example: clock). Tick every box "
+            "under Devices and Apps (or just tick everything). Click \"Generate token\".\n\n"
             "3.  Copy the token it shows (you only see it once) and paste it in the box below.\n\n"
             "4.  Click Connect. Your web browser opens a SmartThings page asking you to allow access. "
             "Click Allow, then come back here.")).pack(anchor="w", pady=8)
