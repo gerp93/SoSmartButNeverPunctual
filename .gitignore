@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+.env
+*.log
+# Tokens and device choices live outside the repo; never commit local copies.
+state
+state.tmp
+config.json
+lock
