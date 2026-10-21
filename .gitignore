@@ -9,3 +9,9 @@ state
 state.tmp
 config.json
 lock
+
+# Written by the release workflow
+_version.py
+build/
+dist/
+*.spec

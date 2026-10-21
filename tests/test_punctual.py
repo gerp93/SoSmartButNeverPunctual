@@ -302,6 +302,51 @@ class ScheduleTests(StoreTestCase):
                 punctual.schedule_install(self.store, "03:17")
 
 
+class PackagedAppTests(StoreTestCase):
+    def test_frozen_build_schedules_the_exe_itself(self):
+        with mock.patch.object(sys, "frozen", True, create=True), \
+                mock.patch.object(sys, "executable", "C:\\Apps\\SoSmartButNeverPunctual.exe"):
+            command = punctual.sync_command_line(self.store, default_dir=True, jitter=20)
+        self.assertEqual(command, ["C:\\Apps\\SoSmartButNeverPunctual.exe", "sync", "--jitter", "20"])
+
+    def test_packaged_exe_with_arguments_runs_the_engine_not_the_window(self):
+        try:
+            import punctual_gui
+        except SystemExit:
+            self.skipTest("Tkinter not available")
+        with mock.patch.object(sys, "argv", ["app", "status"]), \
+                mock.patch.dict(os.environ, {"SSBNP_CONFIG_DIR": str(self.store.dir)}), \
+                mock.patch.object(punctual_gui.tk, "Tk", side_effect=AssertionError("window opened")), \
+                redirect_stdout(io.StringIO()):
+            self.assertEqual(punctual_gui.main(), 2)  # 2 = not set up yet, and no window was created
+
+
+class ThemingTests(unittest.TestCase):
+    def setUp(self):
+        try:
+            import tkinter as tk
+            import theming
+            self.root = tk.Tk()
+        except (ImportError, SystemExit, Exception) as exc:  # no Tk, or no display
+            self.skipTest(f"Tk unavailable: {exc}")
+        self.theming = theming
+        self.addCleanup(self.root.destroy)
+
+    def test_every_theme_applies_and_system_default_restores(self):
+        if not self.theming.THEMES:
+            self.skipTest("visual-assault-tkinter not installed")
+        self.theming.capture_defaults(self.root)
+        for theme_id in self.theming.THEMES:
+            self.theming.apply_theme(self.root, theme_id)
+            self.assertEqual(self.theming.background(), self.theming.THEMES[theme_id]["background"])
+        self.theming.apply_theme(self.root, None)
+        self.assertEqual(self.theming.background(), self.root.cget("background"))
+
+    def test_default_theme_exists_when_package_installed(self):
+        if self.theming.THEMES:
+            self.assertIn(self.theming.DEFAULT_THEME_ID, self.theming.THEMES)
+
+
 class ParsingTests(unittest.TestCase):
     def test_parse_full_url(self):
         code, state, error = punctual.parse_redirect("https://x.example/cb?code=abc123&state=s1")

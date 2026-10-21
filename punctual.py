@@ -39,7 +39,10 @@ from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
-__version__ = "0.1.0"
+try:  # written by the release workflow; absent when running from source
+    from _version import __version__
+except ImportError:
+    __version__ = "0.0.0-dev"
 
 API_URL = "https://api.smartthings.com/v1"
 AUTHORIZE_URL = f"{API_URL}/oauth/authorize"
@@ -660,13 +663,16 @@ def parse_time(text: str):
 
 
 def sync_command_line(store: Store, default_dir: bool, jitter: int) -> list:
-    """The command a scheduler should run: python (windowless on Windows) + this script + sync."""
-    python = sys.executable
-    if sys.platform == "win32":
-        windowless = Path(python).with_name("pythonw.exe")
-        if windowless.exists():
-            python = str(windowless)
-    args = [python, str(Path(__file__).resolve())]
+    """The command a scheduler should run: the packaged app, or python (windowless on Windows) + this script."""
+    if getattr(sys, "frozen", False):  # packaged app: the exe itself handles `sync` (see punctual_gui.main)
+        args = [sys.executable]
+    else:
+        python = sys.executable
+        if sys.platform == "win32":
+            windowless = Path(python).with_name("pythonw.exe")
+            if windowless.exists():
+                python = str(windowless)
+        args = [python, str(Path(__file__).resolve())]
     if not default_dir:
         args += ["--config-dir", str(store.dir)]
     return args + ["sync", "--jitter", str(jitter)]

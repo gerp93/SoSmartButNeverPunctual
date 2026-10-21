@@ -8,10 +8,12 @@ Needs Tkinter (bundled with Python on Windows/macOS; on Debian/Ubuntu install
 """
 from __future__ import annotations
 
+import os
 import queue
 import sys
 import threading
 import webbrowser
+from pathlib import Path
 
 try:
     import tkinter as tk
@@ -26,10 +28,22 @@ except ImportError:  # pragma: no cover - depends on the machine
     )
 
 import punctual
+import theming
+
+try:  # only does anything in a packaged build; needs requirements.txt when run from source
+    import updater
+except ImportError:
+    updater = None
 
 TITLE = "SoSmartButNeverPunctual"
 TOKENS_URL = "https://account.smartthings.com/tokens"
 README_URL = "https://github.com/gerp93/SoSmartButNeverPunctual#setup"
+
+
+def resource_path(relative: str) -> Path:
+    """Find a bundled file both from source and inside a PyInstaller build."""
+    base = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
+    return base / relative
 
 
 class App:
@@ -48,8 +62,20 @@ class App:
         frame.pack(fill="both", expand=True)
         frame.columnconfigure(0, weight=1)
 
-        ttk.Label(frame, text="If you're so smart, what time is it?", font=("TkDefaultFont", 12, "bold")).grid(
-            row=0, column=0, sticky="w", pady=(0, 8))
+        header = ttk.Frame(frame)
+        header.grid(row=0, column=0, sticky="ew", pady=(0, 8))
+        self.setup_icon(header)
+        ttk.Label(header, text="If you're so smart,\nwhat time is it?", font=("TkDefaultFont", 12, "bold")).pack(
+            side="left", padx=8)
+        if theming.THEMES:
+            picker = ttk.Frame(header)
+            picker.pack(side="right")
+            ttk.Label(picker, text="Theme").pack(anchor="e")
+            self.theme_var = tk.StringVar()
+            combo = ttk.Combobox(picker, textvariable=self.theme_var, state="readonly", width=18,
+                                 values=[theming.DEFAULT_LABEL] + list(theming.THEME_NAMES.values()))
+            combo.pack()
+            combo.bind("<<ComboboxSelected>>", self.on_theme_chosen)
 
         connect = ttk.LabelFrame(frame, text="1. SmartThings login", padding=8)
         connect.grid(row=1, column=0, sticky="ew", pady=4)
@@ -62,7 +88,7 @@ class App:
         self.device_box = ttk.Frame(devices)
         self.device_box.pack(fill="x")
         self.device_hint = tk.StringVar(value="Connect first, then press Refresh.")
-        ttk.Label(devices, textvariable=self.device_hint, foreground="gray40").pack(anchor="w", pady=(4, 0))
+        ttk.Label(devices, textvariable=self.device_hint).pack(anchor="w", pady=(4, 0))
         ttk.Button(devices, text="Refresh list", command=self.refresh_devices).pack(anchor="e")
 
         sync = ttk.LabelFrame(frame, text="3. Set the clocks", padding=8)
@@ -83,8 +109,7 @@ class App:
         self.schedule_text = tk.StringVar()
         ttk.Label(schedule, textvariable=self.schedule_text).pack(anchor="w", pady=(4, 0))
         how = "Windows Task Scheduler" if sys.platform == "win32" else "your crontab"
-        ttk.Label(schedule, text=f"Uses {how}. An odd time is kinder to SmartThings than midnight.",
-                  foreground="gray40").pack(anchor="w")
+        ttk.Label(schedule, text=f"Uses {how}. An odd time is kinder to SmartThings than midnight.").pack(anchor="w")
 
         frame.rowconfigure(5, weight=1)
         logframe = ttk.LabelFrame(frame, text="Log", padding=4)
@@ -95,8 +120,17 @@ class App:
         scroll.pack(side="right", fill="y")
         self.log_view.pack(side="left", fill="both", expand=True)
 
+        footer = ttk.Frame(frame)
+        footer.grid(row=6, column=0, sticky="ew")
+        ttk.Label(footer, text=f"Version {punctual.__version__}").pack(side="left")
+        self.update_button = ttk.Button(footer, text="", command=self.install_update)
+        self.update_info = None  # {"version", "download_url"} when a newer release exists
+
+        theming.capture_defaults(root)
+        self.apply_saved_theme()
         self.refresh_state()
         self.pump()
+        self.root.after(1500, self.check_for_updates)
         if self.store.load_state_safe():
             self.refresh_devices()
 
@@ -120,23 +154,33 @@ class App:
         self.log_view.see("end")
         self.log_view.configure(state="disabled")
 
-    def background(self, work, done=None) -> None:
-        if self.busy:
-            messagebox.showinfo(TITLE, "Still working on the last thing. Give it a moment.")
-            return
-        self.busy = True
-        self.root.configure(cursor="watch")
+    def background(self, work, done=None, quiet: bool = False) -> None:
+        """Run work() off the UI thread. quiet=True is for optional checks: it doesn't block the
+        buttons and failures only go to the log."""
+        if not quiet:
+            if self.busy:
+                messagebox.showinfo(TITLE, "Still working on the last thing. Give it a moment.")
+                return
+            self.busy = True
+            self.root.configure(cursor="watch")
 
         def finish(callback):
-            self.busy = False
-            self.root.configure(cursor="")
+            if not quiet:
+                self.busy = False
+                self.root.configure(cursor="")
             callback()
+
+        def failed(exc):
+            if quiet:
+                self.write_log(f"(skipped: {exc})")
+            else:
+                self.show_error(exc)
 
         def target():
             try:
                 result = work()
             except Exception as exc:  # shown to the user, not swallowed
-                self.events.put(("call", lambda: finish(lambda: self.show_error(exc))))
+                self.events.put(("call", lambda: finish(lambda: failed(exc))))
             else:
                 self.events.put(("call", lambda: finish(lambda: done(result) if done else None)))
 
@@ -146,6 +190,61 @@ class App:
         self.write_log(f"error: {exc}")
         messagebox.showerror(TITLE, str(exc))
         self.refresh_state()
+
+    # ----- look and updates -----------------------------------------------
+
+    def setup_icon(self, header) -> None:
+        """Window/taskbar icon plus a small logo next to the title (skipped if the file is missing)."""
+        try:
+            icon = tk.PhotoImage(file=str(resource_path("assets/icon.png")))
+        except tk.TclError:
+            return
+        self.root.iconphoto(True, icon)
+        self._logo = icon.subsample(4)  # keep a reference or Tk drops the image
+        ttk.Label(header, image=self._logo).pack(side="left")
+
+    def apply_saved_theme(self) -> None:
+        if not theming.THEMES:
+            return
+        config = self.store.load_config()
+        theme_id = config["theme"] if "theme" in config else theming.DEFAULT_THEME_ID
+        if theme_id not in theming.THEMES:
+            theme_id = None  # System Default (also covers a theme that a newer package removed)
+        theming.apply_theme(self.root, theme_id)
+        self.theme_var.set(theming.THEME_NAMES.get(theme_id, theming.DEFAULT_LABEL))
+
+    def on_theme_chosen(self, _event=None) -> None:
+        by_name = {name: theme_id for theme_id, name in theming.THEME_NAMES.items()}
+        theme_id = by_name.get(self.theme_var.get())  # None = System Default
+        theming.apply_theme(self.root, theme_id)
+        config = self.store.load_config()
+        config["theme"] = theme_id or ""
+        self.store.save_config(config)
+
+    def check_for_updates(self) -> None:
+        if updater is None:
+            return
+
+        def done(info):
+            if info:
+                self.update_info = info
+                self.update_button.configure(text=f"Update to v{info['version']}")
+                self.update_button.pack(side="right")
+                self.write_log(f"Version {info['version']} is available.")
+
+        self.background(updater.check_for_update, done, quiet=True)
+
+    def install_update(self) -> None:
+        if not self.update_info or not messagebox.askyesno(
+                TITLE, f"Download version {self.update_info['version']} and restart now?"):
+            return
+        url = self.update_info["download_url"]
+
+        def work():
+            path = updater.download_update(url)
+            updater.apply_update_and_restart(path)  # exits this process
+
+        self.background(work)
 
     # ----- state ----------------------------------------------------------
 
@@ -169,6 +268,7 @@ class App:
     def open_connect(self) -> None:
         win = tk.Toplevel(self.root)
         win.title("Connect to SmartThings")
+        win.configure(background=theming.background())
         win.transient(self.root)
         body = ttk.Frame(win, padding=12)
         body.pack(fill="both", expand=True)
@@ -273,6 +373,10 @@ class App:
 
 
 def main() -> int:
+    if len(sys.argv) > 1:
+        # The packaged app is also the scheduled job: `App.exe sync ...` runs the script
+        # engine without opening a window (see punctual.sync_command_line).
+        return punctual.main()
     root = tk.Tk()
     App(root)
     root.mainloop()
