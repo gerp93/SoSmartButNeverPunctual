@@ -34,6 +34,11 @@ Scheduler.
 All three do the same thing and share the same saved login and settings, so you
 can switch between them. `punctual.py` never needs the window files.
 
+**Updating (Windows installer):** the app is installed for all users (Program Files, so the
+installer asks for admin). The "Update to vX" button can only replace the installed app when the
+app was started with "Run as administrator". Otherwise just download the newest `Setup.exe`
+from the Releases page and run it over the top; your login and settings are kept.
+
 The builds are unsigned, so Windows SmartScreen and macOS Gatekeeper warn about an
 unrecognized publisher on first run. Click through ("More info", then "Run anyway" on
 Windows; right-click, then "Open" on macOS). On macOS and Linux, make the download
