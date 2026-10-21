@@ -23,12 +23,17 @@ import getpass
 import json
 import os
 import random
+import re
 import secrets
+import shlex
+import shutil
+import subprocess
 import sys
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import uuid
 import webbrowser
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -60,8 +65,34 @@ class AuthRequired(PunctualError):
     """The stored login is missing or no longer valid (exit code 2)."""
 
 
+TASK_NAME = "SoSmartButNeverPunctual"
+LOG_MAX_BYTES = 200_000
+
+# Where log lines go besides stdout. The GUI adds a sink; main() and the GUI set the file.
+LOG_SINKS: list = []
+_log_path = None
+
+
+def set_log_file(path) -> None:
+    global _log_path
+    _log_path = Path(path) if path else None
+
+
 def log(message: str) -> None:
-    print(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}  {message}", flush=True)
+    line = f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}  {message}"
+    if sys.stdout is not None:  # None under pythonw.exe (scheduled runs)
+        with contextlib.suppress(Exception):
+            print(line, flush=True)
+    if _log_path is not None:
+        with contextlib.suppress(OSError):
+            _log_path.parent.mkdir(parents=True, exist_ok=True)
+            if _log_path.exists() and _log_path.stat().st_size > LOG_MAX_BYTES:
+                os.replace(str(_log_path), str(_log_path) + ".1")
+            with open(_log_path, "a", encoding="utf-8") as handle:
+                handle.write(line + "\n")
+    for sink in LOG_SINKS:
+        with contextlib.suppress(Exception):
+            sink(line)
 
 
 # --------------------------------------------------------------------------
@@ -134,6 +165,13 @@ class Store:
                     "setup read it; run the scheduled job as that user, or run setup again."
                 )
         return json.loads(raw.decode("utf-8"))
+
+    def load_state_safe(self):
+        """Like load_state, but None instead of an error (for showing status in a UI)."""
+        try:
+            return self.load_state()
+        except (PunctualError, ValueError):
+            return None
 
     def save_state(self, state: dict) -> None:
         raw = json.dumps(state).encode("utf-8")
@@ -301,6 +339,11 @@ def list_devices(store: Store, state: dict) -> list:
     return devices
 
 
+def fetch_devices(store: Store) -> list:
+    with store.lock():
+        return list_devices(store, load_logged_in(store))
+
+
 def clock_timestamp(use_utc: bool) -> str:
     now = datetime.now(timezone.utc) if use_utc else datetime.now()
     return now.strftime(CLOCK_FORMAT)
@@ -380,12 +423,50 @@ def is_loopback_redirect(redirect_uri: str) -> bool:
     return parsed.scheme == "http" and parsed.hostname in ("localhost", "127.0.0.1") and bool(parsed.port)
 
 
-def cmd_setup(store: Store, args) -> int:
-    print("Authorize this script with your SmartThings OAuth-In app (see README, step 1).\n")
-    client_id = args.client_id or input("Client ID: ").strip()
-    client_secret = args.client_secret or getpass.getpass("Client secret (hidden): ").strip()
-    redirect_uri = args.redirect_uri or input("Redirect URI you registered: ").strip()
-    scope = args.scope
+DEFAULT_REDIRECT_URI = "http://localhost:8123/callback"
+APP_DISPLAY_NAME = "SoSmartButNeverPunctual"
+
+
+def create_oauth_app(token: str, redirect_uri: str = DEFAULT_REDIRECT_URI, scope: str = DEFAULT_SCOPE):
+    """Create the user's own OAuth-In app with a short-lived personal access token.
+
+    Returns (client_id, client_secret). The token is only used for these calls and
+    is never stored. Equivalent to `smartthings apps:create`.
+    """
+    headers = {"Authorization": f"Bearer {token.strip()}", "Accept": "application/json",
+               "Content-Type": "application/json"}
+    app_request = {
+        "appName": f"sosmart-{uuid.uuid4().hex[:16]}",
+        "displayName": APP_DISPLAY_NAME,
+        "description": "Keeps appliance clocks in sync",
+        "singleInstance": True,
+        "appType": "API_ONLY",
+        "classifications": ["CONNECTED_SERVICE"],
+        "apiOnly": {},
+    }
+    status, data = http("POST", f"{API_URL}/apps", headers=headers, body=json.dumps(app_request).encode())
+    if status not in (200, 201) or "appId" not in data:
+        raise PunctualError(f"could not create the SmartThings app (HTTP {status}: {describe_error(data)}). "
+                            "Check the token has the Apps permissions, or create the app by hand (README step 1).")
+    app_id = data["appId"]
+    oauth_request = {"clientName": APP_DISPLAY_NAME, "scope": scope.split(), "redirectUris": [redirect_uri]}
+    status, data = http("POST", f"{API_URL}/apps/{app_id}/oauth/generate", headers=headers,
+                        body=json.dumps(oauth_request).encode())
+    client_id = data.get("oauthClientId") if isinstance(data, dict) else None
+    client_secret = data.get("oauthClientSecret") if isinstance(data, dict) else None
+    if status not in (200, 201) or not client_id or not client_secret:
+        raise PunctualError(f"the app was created but its login details could not be generated "
+                            f"(HTTP {status}: {describe_error(data)}). App ID: {app_id}")
+    return client_id, client_secret
+
+
+def authorize(store: Store, client_id: str, client_secret: str, redirect_uri: str = DEFAULT_REDIRECT_URI,
+              scope: str = DEFAULT_SCOPE, ask_pasted=None, force_paste: bool = False, notify=log) -> None:
+    """Browser login (OAuth authorization code) and save the tokens.
+
+    Uses a one-shot localhost listener when the redirect URI is http://localhost:PORT/...;
+    otherwise calls ask_pasted(prompt) to get the redirected URL pasted by the user.
+    """
     if not (client_id and client_secret and redirect_uri):
         raise PunctualError("client ID, client secret and redirect URI are all required")
 
@@ -402,20 +483,21 @@ def cmd_setup(store: Store, args) -> int:
     )
     url = f"{AUTHORIZE_URL}?{query}"
 
-    use_loopback = is_loopback_redirect(redirect_uri) and not args.paste
-    print("\nOpening your browser to approve access. If it does not open, visit:\n\n" + url + "\n")
+    use_loopback = is_loopback_redirect(redirect_uri) and not force_paste
+    if not use_loopback and ask_pasted is None:
+        raise PunctualError("this redirect URI is not a localhost address, so the redirected URL has to be pasted")
+    notify("Opening your browser to approve access. If it does not open, visit: " + url)
     with contextlib.suppress(Exception):
         webbrowser.open(url)
 
     if use_loopback:
-        print(f"Waiting for the redirect on {redirect_uri} ...")
+        notify(f"Waiting for the redirect on {redirect_uri} ...")
         redirected = capture_via_loopback(redirect_uri)
     else:
-        print(
+        redirected = ask_pasted(
             "After you approve, your browser is sent to the redirect URI. That page may fail to load;\n"
             "that is fine. Copy the full address from the browser's address bar and paste it here."
         )
-        redirected = input("\nRedirected URL (or just the code): ")
 
     code, returned_state, error = parse_redirect(redirected)
     if error:
@@ -437,7 +519,22 @@ def cmd_setup(store: Store, args) -> int:
     )
     state = {"client_id": client_id, "client_secret": client_secret, "redirect_uri": redirect_uri, "scope": scope}
     apply_tokens(store, state, payload)
-    print(f"\nLogged in. Saved to {store.dir}")
+    notify(f"Logged in. Saved to {store.dir}")
+
+
+def cmd_setup(store: Store, args) -> int:
+    print("Authorize this script with your SmartThings OAuth-In app (see README, step 1).\n")
+    if args.token:
+        print("Creating your SmartThings app with the token you gave ...")
+        client_id, client_secret = create_oauth_app(args.token, args.redirect_uri or DEFAULT_REDIRECT_URI, args.scope)
+    else:
+        client_id = args.client_id or input("Client ID: ").strip()
+        client_secret = args.client_secret or getpass.getpass("Client secret (hidden): ").strip()
+    redirect_uri = args.redirect_uri or input(f"Redirect URI you registered [{DEFAULT_REDIRECT_URI}]: ").strip() \
+        or DEFAULT_REDIRECT_URI
+    authorize(store, client_id, client_secret, redirect_uri, args.scope,
+              ask_pasted=lambda prompt: input(f"\n{prompt}\n\nRedirected URL (or just the code): "),
+              force_paste=args.paste, notify=print)
     print("Next: python punctual.py select")
     return 0
 
@@ -505,24 +602,143 @@ def resolve_targets(store: Store, state: dict, requested: list | None) -> list:
     return targets
 
 
-def cmd_sync(store: Store, args) -> int:
+def record_last_sync(store: Store, ok: bool, summary: str) -> None:
+    config = store.load_config()
+    config["last_sync"] = {"at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "ok": ok, "summary": summary}
+    store.save_config(config)
+
+
+def run_sync(store: Store, devices=None, use_utc: bool = False, jitter: float = 0, dry_run: bool = False):
+    """Set the clocks. Returns (succeeded_names, failed_names); raises PunctualError if it can't start."""
     with store.lock():
-        state = load_logged_in(store)
-        targets = resolve_targets(store, state, args.device)
-        if args.jitter and not args.dry_run:
-            delay = random.uniform(0, args.jitter * 60)
-            log(f"waiting {delay / 60:.1f} min (jitter) so runs do not all hit SmartThings at once")
-            time.sleep(delay)
-        timestamp = clock_timestamp(args.utc)
-        failures = 0
-        for target in targets:
-            if args.dry_run:
-                log(f"[dry run] would set {target['name']} to {timestamp}")
-                continue
-            ok, detail = set_clock(store, state, target["id"], timestamp)
-            log(f"{target['name']}: {'ok' if ok else 'FAILED'} ({detail}) -> {timestamp}")
-            failures += 0 if ok else 1
-    return 1 if failures else 0
+        try:
+            state = load_logged_in(store)
+            targets = resolve_targets(store, state, devices)
+            if jitter and not dry_run:
+                delay = random.uniform(0, jitter * 60)
+                log(f"waiting {delay / 60:.1f} min (jitter) so runs do not all hit SmartThings at once")
+                time.sleep(delay)
+            timestamp = clock_timestamp(use_utc)
+            succeeded, failed = [], []
+            for target in targets:
+                if dry_run:
+                    log(f"[dry run] would set {target['name']} to {timestamp}")
+                    continue
+                ok, detail = set_clock(store, state, target["id"], timestamp)
+                log(f"{target['name']}: {'ok' if ok else 'FAILED'} ({detail}) -> {timestamp}")
+                (succeeded if ok else failed).append(target["name"])
+        except PunctualError as exc:
+            if not dry_run:
+                record_last_sync(store, False, str(exc))
+            raise
+        if not dry_run:
+            summary = f"set {timestamp}: " + ", ".join(succeeded or ["nothing"])
+            if failed:
+                summary += "; FAILED: " + ", ".join(failed)
+            record_last_sync(store, not failed, summary)
+    return succeeded, failed
+
+
+def cmd_sync(store: Store, args) -> int:
+    _, failed = run_sync(store, args.device, args.utc, args.jitter, args.dry_run)
+    return 1 if failed else 0
+
+
+# --------------------------------------------------------------------------
+# Scheduling: Task Scheduler on Windows, crontab on Linux/macOS.
+# --------------------------------------------------------------------------
+
+CRON_MARKER = "# SoSmartButNeverPunctual"
+_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+
+def parse_time(text: str):
+    match = re.fullmatch(r"\s*(\d{1,2}):(\d{2})\s*", text or "")
+    if not match or int(match.group(1)) > 23 or int(match.group(2)) > 59:
+        raise PunctualError("time must look like 03:17 (24-hour HH:MM)")
+    return int(match.group(1)), int(match.group(2))
+
+
+def sync_command_line(store: Store, default_dir: bool, jitter: int) -> list:
+    """The command a scheduler should run: python (windowless on Windows) + this script + sync."""
+    python = sys.executable
+    if sys.platform == "win32":
+        windowless = Path(python).with_name("pythonw.exe")
+        if windowless.exists():
+            python = str(windowless)
+    args = [python, str(Path(__file__).resolve())]
+    if not default_dir:
+        args += ["--config-dir", str(store.dir)]
+    return args + ["sync", "--jitter", str(jitter)]
+
+
+def _run(command: list):
+    return subprocess.run(command, capture_output=True, text=True, creationflags=_NO_WINDOW)
+
+
+def schedule_exists() -> bool:
+    if sys.platform == "win32":
+        return _run(["schtasks", "/Query", "/TN", TASK_NAME]).returncode == 0
+    listing = _run(["crontab", "-l"]) if shutil.which("crontab") else None
+    return bool(listing and listing.returncode == 0 and CRON_MARKER in listing.stdout)
+
+
+def schedule_install(store: Store, at: str = "03:17", jitter: int = 20, task_name: str = TASK_NAME) -> None:
+    hour, minute = parse_time(at)
+    command = sync_command_line(store, default_dir=(store.dir == config_dir()), jitter=jitter)
+    if sys.platform == "win32":
+        exe, argument = command[0], subprocess.list2cmdline(command[1:])
+        quote = lambda text: text.replace("'", "''")
+        script = (
+            f"$a = New-ScheduledTaskAction -Execute '{quote(exe)}' -Argument '{quote(argument)}'; "
+            f"$t = New-ScheduledTaskTrigger -Daily -At '{hour:02d}:{minute:02d}'; "
+            "$s = New-ScheduledTaskSettingsSet -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Hours 2); "
+            f"Register-ScheduledTask -TaskName '{quote(task_name)}' -Action $a -Trigger $t -Settings $s -Force | Out-Null"
+        )
+        result = _run(["powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script])
+        if result.returncode != 0:
+            raise PunctualError("could not create the scheduled task: " + (result.stderr or result.stdout).strip()[:300])
+    else:
+        if not shutil.which("crontab"):
+            raise PunctualError("crontab not found; install cron or use a systemd timer (see README)")
+        existing = _run(["crontab", "-l"])
+        lines = existing.stdout.splitlines() if existing.returncode == 0 else []
+        lines = [ln for ln in lines if CRON_MARKER not in ln]
+        lines.append(f"{minute} {hour} * * * {shlex.join(command)} >> {shlex.quote(str(store.dir / 'punctual.log'))} 2>&1 {CRON_MARKER}")
+        result = subprocess.run(["crontab", "-"], input="\n".join(lines) + "\n", capture_output=True, text=True)
+        if result.returncode != 0:
+            raise PunctualError("could not update crontab: " + result.stderr.strip()[:300])
+    config = store.load_config()
+    config["schedule"] = {"time": f"{hour:02d}:{minute:02d}"}
+    store.save_config(config)
+
+
+def schedule_remove(store: Store, task_name: str = TASK_NAME) -> None:
+    if sys.platform == "win32":
+        result = _run(["schtasks", "/Delete", "/TN", task_name, "/F"])
+        if result.returncode != 0 and schedule_exists():
+            raise PunctualError("could not remove the scheduled task: " + (result.stderr or result.stdout).strip()[:300])
+    elif shutil.which("crontab"):
+        existing = _run(["crontab", "-l"])
+        if existing.returncode == 0:
+            lines = [ln for ln in existing.stdout.splitlines() if CRON_MARKER not in ln]
+            subprocess.run(["crontab", "-"], input="\n".join(lines) + ("\n" if lines else ""),
+                           capture_output=True, text=True)
+    config = store.load_config()
+    config.pop("schedule", None)
+    store.save_config(config)
+
+
+def cmd_schedule(store: Store, args) -> int:
+    schedule_install(store, args.at, args.jitter)
+    print(f"Scheduled: sync every day at {args.at} (random delay up to {args.jitter} min). Remove with: unschedule")
+    return 0
+
+
+def cmd_unschedule(store: Store, args) -> int:
+    schedule_remove(store)
+    print("Daily sync removed.")
+    return 0
 
 
 def cmd_status(store: Store, args) -> int:
@@ -538,6 +754,12 @@ def cmd_status(store: Store, args) -> int:
     print("The refresh token lapses after about 29 days without a run; scheduled runs keep it alive.")
     devices = store.load_config().get("devices", [])
     print("Devices: " + (", ".join(d["name"] for d in devices) if devices else "none chosen (run: select)"))
+    config = store.load_config()
+    scheduled = config.get("schedule", {}).get("time")
+    print("Schedule: " + (f"daily at {scheduled}" if scheduled and schedule_exists() else "not scheduled"))
+    last = config.get("last_sync")
+    if last:
+        print(f"Last sync: {last['at']} - {'ok' if last['ok'] else 'FAILED'} ({last['summary']})")
     return 0
 
 
@@ -557,6 +779,8 @@ def build_parser() -> argparse.ArgumentParser:
     setup = sub.add_parser("setup", help="one-time login with your SmartThings OAuth-In app")
     setup.add_argument("--client-id")
     setup.add_argument("--client-secret", help="prefer the hidden prompt over passing this on the command line")
+    setup.add_argument("--token", help="a short-lived SmartThings personal access token; creates the OAuth app for you "
+                                       "(instead of --client-id/--client-secret)")
     setup.add_argument("--redirect-uri")
     setup.add_argument("--scope", default=DEFAULT_SCOPE)
     setup.add_argument("--paste", action="store_true", help="paste the redirected URL instead of listening on localhost")
@@ -573,6 +797,12 @@ def build_parser() -> argparse.ArgumentParser:
     sync.add_argument("--dry-run", action="store_true", help="show what would be sent, send nothing")
     sync.set_defaults(func=cmd_sync)
 
+    schedule = sub.add_parser("schedule", help="run sync every day (Task Scheduler on Windows, crontab elsewhere)")
+    schedule.add_argument("--at", default="03:17", metavar="HH:MM", help="24-hour time (default 03:17)")
+    schedule.add_argument("--jitter", type=int, default=20, metavar="MINUTES", help="random delay (default 20)")
+    schedule.set_defaults(func=cmd_schedule)
+    sub.add_parser("unschedule", help="remove the daily sync").set_defaults(func=cmd_unschedule)
+
     sub.add_parser("status", help="show login and device state (no network)").set_defaults(func=cmd_status)
     return parser
 
@@ -580,13 +810,14 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
     store = Store(Path(args.config_dir) if args.config_dir else config_dir())
+    set_log_file(store.dir / "punctual.log")
     try:
         return args.func(store, args)
     except AuthRequired as exc:
-        print(f"error: {exc}", file=sys.stderr)
+        log(f"error: {exc}")
         return 2
     except PunctualError as exc:
-        print(f"error: {exc}", file=sys.stderr)
+        log(f"error: {exc}")
         return 1
     except KeyboardInterrupt:
         return 130

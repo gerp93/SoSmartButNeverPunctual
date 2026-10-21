@@ -23,6 +23,28 @@ Scheduler.
 - Tokens are stored per-user, outside the repo, and encrypted with Windows
   DPAPI on Windows (owner-only file permissions elsewhere).
 
+## Two ways to use it
+
+| | Files to download | Needs |
+|---|---|---|
+| **Window** (point and click) | `punctual.py` **and** `punctual_gui.py` | Python 3.9+ with Tkinter |
+| **Script only** (terminal, servers, cron) | just `punctual.py` | Python 3.9+ |
+
+Both do the same thing and share the same saved login and settings, so you
+can switch between them. `punctual.py` never needs the window file.
+
+**Window:** run `python punctual_gui.py` (on Windows, double-click it). It has
+four boxes: log in, tick your appliances, "Sync clocks now", and a daily schedule
+switch. Tkinter comes with Python on Windows and macOS. On Linux install it first:
+
+```
+sudo apt install python3-tk        # Debian, Ubuntu, Raspberry Pi OS
+sudo dnf install python3-tkinter   # Fedora
+sudo pacman -S tk                  # Arch
+```
+
+The rest of this page describes the script; the window does the same steps with buttons.
+
 ## Does it work on my appliance?
 
 Confirmed on a Samsung smart range (NE63A6751SS) and an over-the-range
@@ -46,6 +68,21 @@ alive. If the machine is off for a month, run `setup` again.
 ### 1. Create your own SmartThings OAuth-In app (once)
 
 Each person uses their own app, so nobody shares credentials.
+
+**Shortcut (experimental): let the script create it.** Create a personal access
+token at <https://account.smartthings.com/tokens> (any name; tick the Apps and
+Devices permissions), then use it once:
+
+```
+python punctual.py setup --token <the-token>
+```
+
+That creates the app, logs in and discards the token, so you can skip the rest of
+this step and step 2. It relies on SmartThings' app-creation API behaving as
+documented by the community. If it fails, use the manual route below. The window
+version has the same shortcut on its Connect screen.
+
+**Manual route:**
 
 1. Install the [SmartThings CLI](https://developer.smartthings.com/docs/sdks/cli)
    and sign in (it opens a browser; use Chrome if another browser misbehaves).
@@ -101,6 +138,19 @@ Once a day is plenty. Pick an odd time such as 3:17 AM rather than midnight or
 the top of the hour (the community reports load spikes and delays at round
 times), and add `--jitter 20` to wait a random 0-20 minutes first.
 
+**The easy way** (Windows Task Scheduler, or your crontab on Linux/macOS):
+
+```
+python punctual.py schedule --at 03:17
+python punctual.py unschedule
+```
+
+The window's "Do it every day" box does the same. Runs are logged to `punctual.log`
+in the settings folder, and `python punctual.py status` shows the last result.
+On Windows the task runs as you (the saved login is only readable by you) and
+catches up if the PC was off at 3:17. The manual recipes below do the same thing
+by hand, or use systemd instead of cron.
+
 ### Windows (Task Scheduler)
 
 Run this in PowerShell as the same user who ran `setup`. Windows encrypts the
@@ -149,7 +199,8 @@ Then `systemctl --user enable --now punctual.timer`.
 
 | Command | What it does |
 |---|---|
-| `setup` | One-time login with your OAuth-In app |
+| `setup` | One-time login with your OAuth-In app (or `--token` to create the app for you) |
+| `schedule` / `unschedule` | Turn the daily sync on (`--at HH:MM`, `--jitter MINUTES`) or off |
 | `devices` | List your SmartThings devices |
 | `select` | Choose which devices to sync (saved) |
 | `sync` | Set the clocks. Options: `--device NAME_OR_ID` (repeatable), `--utc`, `--jitter MINUTES`, `--dry-run` |
@@ -178,14 +229,16 @@ the `SSBNP_CONFIG_DIR` environment variable.
 python -m unittest discover -s tests -v
 ```
 
-The code is one file, `punctual.py`, plus tests in `tests/`.
+`punctual.py` is the whole engine and CLI. `punctual_gui.py` is a thin Tkinter
+window on top of it. Tests are in `tests/`.
 
 ## Standards
 
 This repo follows [KVG_Standards](https://github.com/gerp93/KVG_Standards).
-It is a headless script, so the desktop-app parts (theming, installer,
-update-check, logo) don't apply. It does follow the license, `TODO.md` and
-pull-request conventions.
+It is a script with a small optional window, not a packaged desktop app, so the
+desktop-app parts (VisualAssault theme, installer, update-check, logo) are not
+done yet; see `TODO.md`. It does follow the license, `TODO.md` and pull-request
+conventions.
 
 ## License
 
