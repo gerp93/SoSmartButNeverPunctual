@@ -449,8 +449,9 @@ def create_oauth_app(token: str, redirect_uri: str = DEFAULT_REDIRECT_URI, scope
     }
     status, data = http("POST", f"{API_URL}/apps", headers=headers, body=json.dumps(app_request).encode())
     if status not in (200, 201) or "appId" not in data:
-        raise PunctualError(f"could not create the SmartThings app (HTTP {status}: {describe_error(data)}). "
-                            "Check the token has the Apps permissions, or create the app by hand (README step 1).")
+        raise PunctualError(f"SmartThings did not accept that token (HTTP {status}: {describe_error(data)}). "
+                            "Make a new token on the token page and tick the Devices and Apps boxes. "
+                            "(Advanced: you can use your own app instead, see the README.)")
     app_id = data["appId"]
     oauth_request = {"clientName": APP_DISPLAY_NAME, "scope": scope.split(), "redirectUris": [redirect_uri]}
     status, data = http("POST", f"{API_URL}/apps/{app_id}/oauth/generate", headers=headers,
