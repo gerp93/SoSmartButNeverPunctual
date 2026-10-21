@@ -35,9 +35,8 @@ Scheduler.
 3. Tick the appliances you want kept in sync (for example your range and microwave) and press
    **Sync clocks now**. Look at the appliance display to confirm the time changed.
 4. Under **Do it every day**, pick a time and click **Turn on**. Done: the clocks are now
-   corrected every day, even after a power outage.
-   The task waits a random 0-20 minutes after that time before it sends the clocks, so a test right
-   after turning it on looks like nothing happens; check "Last sync" in the window a while later.
+   corrected every day, even after a power outage. It runs at exactly the time you pick, and
+   Windows catches up if the PC was off then.
 
 Why the token? SmartThings has no simple "log in" for apps like this, so the app uses
 your one-time token to register itself with your SmartThings account. The token is thrown
@@ -175,7 +174,8 @@ If the display ends up off by your UTC offset, use `sync --utc` instead.
 
 Once a day is plenty. Pick an odd time such as 3:17 AM rather than midnight or
 the top of the hour (the community reports load spikes and delays at round
-times), and add `--jitter 20` to wait a random 0-20 minutes first.
+times). Optionally add `--jitter 20` to wait a random 0-20 minutes first; that only matters if
+many people share one schedule, so most people should leave it off.
 
 **The easy way** (Windows Task Scheduler, or your crontab on Linux/macOS):
 
@@ -197,7 +197,7 @@ saved login for that user, so the task must run as them. Use the full path to
 `python`, from `(Get-Command python).Source`.
 
 ```powershell
-$action   = New-ScheduledTaskAction -Execute "C:\Path\To\python.exe" -Argument "C:\Path\To\punctual.py sync --jitter 20"
+$action   = New-ScheduledTaskAction -Execute "C:\Path\To\python.exe" -Argument "C:\Path\To\punctual.py sync"
 $trigger  = New-ScheduledTaskTrigger -Daily -At 3:17am
 $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable
 Register-ScheduledTask -TaskName "SoSmartButNeverPunctual" -Action $action -Trigger $trigger -Settings $settings
@@ -208,7 +208,7 @@ Register-ScheduledTask -TaskName "SoSmartButNeverPunctual" -Action $action -Trig
 ### Linux / macOS (cron)
 
 ```
-17 3 * * * /usr/bin/python3 /opt/punctual/punctual.py sync --jitter 20 >> $HOME/punctual.log 2>&1
+17 3 * * * /usr/bin/python3 /opt/punctual/punctual.py sync >> $HOME/punctual.log 2>&1
 ```
 
 ### Linux (systemd timer)
@@ -218,7 +218,7 @@ Register-ScheduledTask -TaskName "SoSmartButNeverPunctual" -Action $action -Trig
 ```ini
 [Service]
 Type=oneshot
-ExecStart=/usr/bin/python3 /opt/punctual/punctual.py sync --jitter 20
+ExecStart=/usr/bin/python3 /opt/punctual/punctual.py sync
 ```
 
 `~/.config/systemd/user/punctual.timer`:

@@ -329,6 +329,7 @@ class ScheduleTests(StoreTestCase):
         self.assertEqual(command[-3:], ["sync", "--jitter", "20"])
         custom = punctual.sync_command_line(self.store, default_dir=False, jitter=0)
         self.assertIn("--config-dir", custom)
+        self.assertNotIn("--jitter", custom)  # no random wait unless asked for
 
     def test_cron_install_replaces_old_entry_and_remove_cleans_up(self):
         existing = "MAILTO=me\n0 1 * * * /usr/bin/other\n5 5 * * * old " + punctual.CRON_MARKER + "\n"
