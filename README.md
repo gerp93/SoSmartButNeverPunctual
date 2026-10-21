@@ -36,6 +36,8 @@ Scheduler.
    **Sync clocks now**. Look at the appliance display to confirm the time changed.
 4. Under **Do it every day**, pick a time and click **Turn on**. Done: the clocks are now
    corrected every day, even after a power outage.
+   The task waits a random 0-20 minutes after that time before it sends the clocks, so a test right
+   after turning it on looks like nothing happens; check "Last sync" in the window a while later.
 
 Why the token? SmartThings has no simple "log in" for apps like this, so the app uses
 your one-time token to register itself with your SmartThings account. The token is thrown

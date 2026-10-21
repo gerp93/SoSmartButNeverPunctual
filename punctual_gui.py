@@ -109,7 +109,10 @@ class App:
         self.schedule_text = tk.StringVar()
         ttk.Label(schedule, textvariable=self.schedule_text).pack(anchor="w", pady=(4, 0))
         how = "Windows Task Scheduler" if sys.platform == "win32" else "your crontab"
-        ttk.Label(schedule, text=f"Uses {how}. An odd time is kinder to SmartThings than midnight.").pack(anchor="w")
+        ttk.Label(schedule, wraplength=470, justify="left", text=(
+            f"Uses {how}. It runs at this time plus a random wait of up to 20 minutes, so a test right "
+            "after turning it on will look like nothing happens. Check \"Last sync\" above a while "
+            "later. An odd time like 03:17 is kinder to SmartThings than midnight.")).pack(anchor="w")
 
         frame.rowconfigure(5, weight=1)
         logframe = ttk.LabelFrame(frame, text="Log", padding=4)
