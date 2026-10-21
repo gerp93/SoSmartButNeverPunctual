@@ -347,6 +347,58 @@ class ThemingTests(unittest.TestCase):
             self.assertIn(self.theming.DEFAULT_THEME_ID, self.theming.THEMES)
 
 
+class WindowTests(StoreTestCase):
+    """Regression: a failing background step must show its error and keep the window alive."""
+
+    def setUp(self):
+        super().setUp()
+        try:
+            import tkinter as tk
+            import punctual_gui
+            self.root = tk.Tk()
+        except (ImportError, SystemExit, Exception) as exc:  # no Tk, or no display
+            self.skipTest(f"Tk unavailable: {exc}")
+        self.gui = punctual_gui
+        self.addCleanup(self.root.destroy)
+        env = mock.patch.dict(os.environ, {"SSBNP_CONFIG_DIR": str(self.store.dir)})
+        env.start()
+        self.addCleanup(env.stop)
+        for name in ("open_connect", "check_for_updates"):  # no first-run dialog, no network
+            patcher = mock.patch.object(punctual_gui.App, name)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def spin(self, seconds=1.0):
+        end = time.time() + seconds
+        while time.time() < end:
+            self.root.update()
+            time.sleep(0.02)
+
+    def test_failed_step_shows_error_and_message_loop_survives(self):
+        shown = []
+        with mock.patch.object(self.gui.messagebox, "showerror", side_effect=lambda t, m, **k: shown.append(m)), \
+                redirect_stdout(io.StringIO()):
+            app = self.gui.App(self.root)
+            app.background(lambda: (_ for _ in ()).throw(punctual.PunctualError("token was rejected")))
+            self.spin()
+            self.assertEqual(shown, ["token was rejected"])
+            self.assertFalse(app.busy)
+            self.assertIn("token was rejected", app.log_view.get("1.0", "end"))
+            # the loop must still deliver later messages
+            punctual.log("still alive")
+            self.spin(0.5)
+            self.assertIn("still alive", app.log_view.get("1.0", "end"))
+
+    def test_bad_callback_does_not_kill_the_loop(self):
+        with redirect_stdout(io.StringIO()):
+            app = self.gui.App(self.root)
+            app.events.put(("call", lambda: 1 / 0))
+            self.spin(0.5)
+            punctual.log("after the crash")
+            self.spin(0.5)
+        self.assertIn("after the crash", app.log_view.get("1.0", "end"))
+
+
 class ParsingTests(unittest.TestCase):
     def test_parse_full_url(self):
         code, state, error = punctual.parse_redirect("https://x.example/cb?code=abc123&state=s1")

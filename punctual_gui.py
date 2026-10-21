@@ -142,10 +142,13 @@ class App:
         try:
             while True:
                 kind, payload = self.events.get_nowait()
-                if kind == "log":
-                    self.write_log(payload)
-                else:
-                    payload()
+                try:
+                    if kind == "log":
+                        self.write_log(payload)
+                    else:
+                        payload()
+                except Exception as exc:  # one bad callback must never stop the message loop
+                    self.write_log(f"(internal error: {exc!r})")
         except queue.Empty:
             pass
         self.root.after(100, self.pump)
@@ -182,14 +185,15 @@ class App:
             try:
                 result = work()
             except Exception as exc:  # shown to the user, not swallowed
-                self.events.put(("call", lambda: finish(lambda: failed(exc))))
+                error = exc  # `exc` is deleted when this block ends, so the callback must not use it
+                self.events.put(("call", lambda: finish(lambda: failed(error))))
             else:
                 self.events.put(("call", lambda: finish(lambda: done(result) if done else None)))
 
         threading.Thread(target=target, daemon=True).start()
 
     def show_error(self, exc: Exception) -> None:
-        self.write_log(f"error: {exc}")
+        punctual.log(f"error: {exc}")  # file + log box
         messagebox.showerror(TITLE, str(exc))
         self.refresh_state()
 
