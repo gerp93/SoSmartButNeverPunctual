@@ -104,7 +104,8 @@ class App:
         ttk.Label(row, text="Time (24-hour):").pack(side="left")
         self.time_var = tk.StringVar(value="03:17")
         ttk.Entry(row, textvariable=self.time_var, width=7).pack(side="left", padx=6)
-        ttk.Button(row, text="Turn on", command=self.schedule_on).pack(side="left")
+        self.schedule_button = ttk.Button(row, text="Turn on", command=self.schedule_on)
+        self.schedule_button.pack(side="left")
         ttk.Button(row, text="Turn off", command=self.schedule_off).pack(side="left", padx=4)
         self.schedule_text = tk.StringVar()
         ttk.Label(schedule, textvariable=self.schedule_text).pack(anchor="w", pady=(4, 0))
@@ -270,7 +271,14 @@ class App:
         when = config.get("schedule", {}).get("time")
         if when:
             self.time_var.set(when)
-        self.schedule_text.set(f"On: every day at {when}." if when and punctual.schedule_exists() else "Off.")
+        self.schedule_on_now = bool(when and punctual.schedule_exists())
+        if self.schedule_on_now:
+            self.schedule_button.configure(text="Change time")
+            self.schedule_text.set(f"On: every day at {when}. There is only ever one daily task; "
+                                   "Change time replaces it.")
+        else:
+            self.schedule_button.configure(text="Turn on")
+            self.schedule_text.set("Off.")
 
     # ----- 1. login -------------------------------------------------------
 
@@ -395,8 +403,9 @@ class App:
 
     def schedule_on(self) -> None:
         at = self.time_var.get()
+        verb = "changed to" if getattr(self, "schedule_on_now", False) else "turned on at"
         self.background(lambda: punctual.schedule_install(self.store, at),
-                        lambda _: (self.refresh_state(), self.write_log(f"Daily sync turned on at {at}.")))
+                        lambda _: (self.refresh_state(), self.write_log(f"Daily sync {verb} {at}.")))
 
     def schedule_off(self) -> None:
         self.background(lambda: punctual.schedule_remove(self.store),
