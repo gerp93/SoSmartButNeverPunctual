@@ -6,6 +6,12 @@ and this repo's `REPO_SCOPE.md` entry for that). Just what's not built yet.
 
 ## Features
 
+- Window: apply the VisualAssault Tkinter theme (pinned to a tag), and give it a logo.
+  Decide with the owner whether it becomes a packaged desktop app (PyInstaller
+  `release-python-gui.yml`, Windows installer, `kvg_updater`) or stays a downloadable
+  script plus window; the KVG desktop-app requirements follow from that choice.
+- Window: a paste box for non-localhost redirect URIs (the terminal already has one).
+- Window and script: a "last run failed" notice when the scheduled task could not log in.
 - Decide a release/CI shape for a plain script. None of KVG_Standards' categories
   covers a CLI utility, so this needs approval first (a tag-only release? a
   Python test workflow?). Until then there is no release pipeline or CI.
@@ -20,6 +26,11 @@ and this repo's `REPO_SCOPE.md` entry for that). Just what's not built yet.
 
 ## Needs real-world verification
 
+- `setup --token` / the window's Connect shortcut: it calls `POST /apps` and
+  `POST /apps/{id}/oauth/generate` with a personal access token. Unconfirmed that
+  SmartThings allows this and which token permissions it needs.
+- The window on Linux/macOS, and `schedule` through a real crontab (tested only
+  with mocks; the Windows Task Scheduler path was checked on a real machine).
 - Whether SmartThings accepts an `http://localhost:<port>/...` redirect URI for
   an OAuth-In app, and whether the `https://` + paste fallback works end to end.
 - The full OAuth flow against a real account (`setup`, a refresh after

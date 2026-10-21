@@ -175,6 +175,133 @@ class ClockTests(StoreTestCase):
             punctual.cmd_sync(self.store, self._sync_args())
 
 
+class RunSyncTests(StoreTestCase):
+    def setUp(self):
+        super().setUp()
+        self.logged_in_state(expires_in=punctual.REFRESH_MARGIN_SECONDS + 3600)
+        self.store.save_config({"devices": [{"id": "d1", "name": "Range"}]})
+
+    def test_success_is_recorded(self):
+        ok = (200, {"results": [{"status": "COMPLETED"}]})
+        with mock.patch.object(punctual, "http", return_value=ok), redirect_stdout(io.StringIO()):
+            succeeded, failed = punctual.run_sync(self.store)
+        self.assertEqual((succeeded, failed), (["Range"], []))
+        last = self.store.load_config()["last_sync"]
+        self.assertTrue(last["ok"])
+        self.assertIn("Range", last["summary"])
+        self.assertEqual(self.store.load_config()["devices"], [{"id": "d1", "name": "Range"}])  # config kept
+
+    def test_device_failure_is_recorded(self):
+        with mock.patch.object(punctual, "http", return_value=(409, {"error": "offline"})), \
+                redirect_stdout(io.StringIO()):
+            succeeded, failed = punctual.run_sync(self.store)
+        self.assertEqual(failed, ["Range"])
+        self.assertFalse(self.store.load_config()["last_sync"]["ok"])
+
+    def test_cannot_start_is_recorded_and_raised(self):
+        self.store.save_config({})
+        with self.assertRaises(punctual.PunctualError):
+            punctual.run_sync(self.store)
+        self.assertFalse(self.store.load_config()["last_sync"]["ok"])
+
+    def test_dry_run_records_nothing(self):
+        with redirect_stdout(io.StringIO()):
+            punctual.run_sync(self.store, dry_run=True)
+        self.assertNotIn("last_sync", self.store.load_config())
+
+
+class CreateAppTests(unittest.TestCase):
+    def test_creates_app_then_generates_credentials(self):
+        replies = [(200, {"appId": "app-1"}), (200, {"oauthClientId": "cid", "oauthClientSecret": "sec"})]
+        with mock.patch.object(punctual, "http", side_effect=replies) as fake:
+            self.assertEqual(punctual.create_oauth_app(" token "), ("cid", "sec"))
+        first, second = fake.call_args_list
+        self.assertEqual(first[0], ("POST", f"{punctual.API_URL}/apps"))
+        self.assertEqual(first[1]["headers"]["Authorization"], "Bearer token")
+        self.assertEqual(second[0], ("POST", f"{punctual.API_URL}/apps/app-1/oauth/generate"))
+        body = json.loads(second[1]["body"])
+        self.assertEqual(body["scope"], ["r:devices:*", "x:devices:*"])
+        self.assertEqual(body["redirectUris"], [punctual.DEFAULT_REDIRECT_URI])
+
+    def test_rejected_token_explains(self):
+        with mock.patch.object(punctual, "http", return_value=(403, {"error": "forbidden"})):
+            with self.assertRaises(punctual.PunctualError) as ctx:
+                punctual.create_oauth_app("token")
+        self.assertIn("403", str(ctx.exception))
+
+    def test_missing_credentials_in_response(self):
+        replies = [(200, {"appId": "app-1"}), (200, {})]
+        with mock.patch.object(punctual, "http", side_effect=replies):
+            with self.assertRaises(punctual.PunctualError):
+                punctual.create_oauth_app("token")
+
+
+class AuthorizeTests(StoreTestCase):
+    def test_non_localhost_redirect_needs_paste_helper(self):
+        with self.assertRaises(punctual.PunctualError):
+            punctual.authorize(self.store, "cid", "sec", "https://example.com/cb")
+
+    def test_paste_flow_saves_tokens(self):
+        with mock.patch.object(punctual, "http", return_value=(200, token_payload())), \
+                mock.patch.object(punctual.webbrowser, "open"):
+            punctual.authorize(self.store, "cid", "sec", "https://example.com/cb",
+                               ask_pasted=lambda prompt: "https://example.com/cb?code=abc", notify=lambda m: None)
+        self.assertEqual(self.store.load_state()["refresh_token"], "new-refresh")
+
+    def test_requires_all_values(self):
+        with self.assertRaises(punctual.PunctualError):
+            punctual.authorize(self.store, "", "sec", "http://localhost:8123/callback")
+
+
+class ScheduleTests(StoreTestCase):
+    def test_parse_time(self):
+        self.assertEqual(punctual.parse_time("03:17"), (3, 17))
+        self.assertEqual(punctual.parse_time(" 3:05 "), (3, 5))
+        for bad in ("", "25:00", "12:60", "noon", "3"):
+            with self.assertRaises(punctual.PunctualError):
+                punctual.parse_time(bad)
+
+    def test_command_line_runs_this_script_with_sync(self):
+        command = punctual.sync_command_line(self.store, default_dir=True, jitter=20)
+        self.assertTrue(command[1].endswith("punctual.py"))
+        self.assertEqual(command[-3:], ["sync", "--jitter", "20"])
+        custom = punctual.sync_command_line(self.store, default_dir=False, jitter=0)
+        self.assertIn("--config-dir", custom)
+
+    def test_cron_install_replaces_old_entry_and_remove_cleans_up(self):
+        existing = "MAILTO=me\n0 1 * * * /usr/bin/other\n5 5 * * * old " + punctual.CRON_MARKER + "\n"
+        written = {}
+
+        def fake_run(command, input=None, **kwargs):
+            written["input"] = input
+            return mock.Mock(returncode=0, stdout="", stderr="")
+
+        with mock.patch.object(punctual.sys, "platform", "linux"), \
+                mock.patch.object(punctual.shutil, "which", return_value="/usr/bin/crontab"), \
+                mock.patch.object(punctual, "_run", return_value=mock.Mock(returncode=0, stdout=existing)), \
+                mock.patch.object(punctual.subprocess, "run", side_effect=fake_run):
+            punctual.schedule_install(self.store, "04:30", 10)
+            lines = written["input"].splitlines()
+            self.assertEqual(sum(punctual.CRON_MARKER in ln for ln in lines), 1)
+            mine = [ln for ln in lines if punctual.CRON_MARKER in ln][0]
+            self.assertTrue(mine.startswith("30 4 * * * "))
+            self.assertIn("/usr/bin/other", written["input"])  # other jobs untouched
+            self.assertIn("MAILTO=me", written["input"])
+            self.assertEqual(self.store.load_config()["schedule"]["time"], "04:30")
+
+            written.clear()
+            punctual._run.return_value = mock.Mock(returncode=0, stdout="\n".join(lines) + "\n")
+            punctual.schedule_remove(self.store)
+            self.assertNotIn(punctual.CRON_MARKER, written["input"])
+            self.assertNotIn("schedule", self.store.load_config())
+
+    def test_cron_missing_is_a_clear_error(self):
+        with mock.patch.object(punctual.sys, "platform", "linux"), \
+                mock.patch.object(punctual.shutil, "which", return_value=None):
+            with self.assertRaises(punctual.PunctualError):
+                punctual.schedule_install(self.store, "03:17")
+
+
 class ParsingTests(unittest.TestCase):
     def test_parse_full_url(self):
         code, state, error = punctual.parse_redirect("https://x.example/cb?code=abc123&state=s1")
