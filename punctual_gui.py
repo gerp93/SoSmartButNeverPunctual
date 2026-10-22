@@ -52,7 +52,7 @@ class App:
         self.store = punctual.Store(punctual.config_dir())
         punctual.set_log_file(self.store.dir / "punctual.log")
         self.events: queue.Queue = queue.Queue()
-        punctual.LOG_SINKS.append(lambda line: self.events.put(("log", line)))
+        self._log_offset = 0  # how much of punctual.log the Log box has shown so far
         self.busy = False
         self.device_vars: list = []  # (BooleanVar, device dict)
 
@@ -135,6 +135,8 @@ class App:
         self.pump()
         self.root.after(self.REFRESH_MS, self.auto_refresh)
         root.bind("<FocusIn>", self.on_focus)
+        self.load_log_tail()
+        self.root.after(self.LOG_POLL_MS, self.poll_log)
         self.root.after(1500, self.check_for_updates)
         if not self.store.load_state_safe():
             self.root.after(500, self.open_connect)  # first run: start the setup right away
@@ -159,23 +161,57 @@ class App:
     def pump(self) -> None:
         try:
             while True:
-                kind, payload = self.events.get_nowait()
+                _kind, payload = self.events.get_nowait()
                 try:
-                    if kind == "log":
-                        self.write_log(payload)
-                    else:
-                        payload()
+                    payload()
                 except Exception as exc:  # one bad callback must never stop the message loop
                     self.write_log(f"(internal error: {exc!r})")
         except queue.Empty:
             pass
         self.root.after(100, self.pump)
 
+    LOG_POLL_MS = 1000
+    LOG_LINES_ON_OPEN = 60
+
     def write_log(self, line: str) -> None:
+        """Log a message. It goes to punctual.log; the Log box shows that file (see poll_log)."""
+        punctual.log(line)
+
+    def _show_lines(self, lines) -> None:
         self.log_view.configure(state="normal")
-        self.log_view.insert("end", line + "\n")
+        for line in lines:
+            self.log_view.insert("end", line + "\n")
         self.log_view.see("end")
         self.log_view.configure(state="disabled")
+
+    def load_log_tail(self) -> None:
+        path = self.store.dir / "punctual.log"
+        try:
+            data = path.read_bytes()
+        except OSError:
+            return
+        self._log_offset = len(data)
+        self._show_lines(data.decode("utf-8", "replace").splitlines()[-self.LOG_LINES_ON_OPEN:])
+
+    def poll_log(self) -> None:
+        """Show new lines from punctual.log, whoever wrote them: this window or the daily task."""
+        try:
+            path = self.store.dir / "punctual.log"
+            size = path.stat().st_size if path.exists() else 0
+            if size < self._log_offset:  # the file was rotated
+                self._log_offset = 0
+            if size > self._log_offset:
+                with open(path, "rb") as handle:
+                    handle.seek(self._log_offset)
+                    chunk = handle.read()
+                end = chunk.rfind(b"\n") + 1  # only whole lines; a half-written one waits for next time
+                if end:
+                    self._log_offset += end
+                    self._show_lines(chunk[:end].decode("utf-8", "replace").splitlines())
+        except OSError:
+            pass
+        finally:
+            self.root.after(self.LOG_POLL_MS, self.poll_log)
 
     def background(self, work, done=None, quiet: bool = False) -> None:
         """Run work() off the UI thread. quiet=True is for optional checks: it doesn't block the
