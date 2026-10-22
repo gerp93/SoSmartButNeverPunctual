@@ -430,6 +430,9 @@ class WindowTests(StoreTestCase):
             patcher = mock.patch.object(punctual_gui.App, name)
             patcher.start()
             self.addCleanup(patcher.stop)
+        fast = mock.patch.object(punctual_gui.App, "LOG_POLL_MS", 50)
+        fast.start()
+        self.addCleanup(fast.stop)
 
     def spin(self, seconds=1.0):
         end = time.time() + seconds
@@ -499,6 +502,40 @@ class WindowTests(StoreTestCase):
             with mock.patch.object(app.root, "focus_get", return_value=app.time_entry):
                 self.spin(0.5)
             self.assertEqual(app.time_var.get(), "21:45")
+
+    def test_log_box_shows_lines_written_by_another_process(self):
+        log_file = self.store.dir / "punctual.log"
+        log_file.parent.mkdir(parents=True, exist_ok=True)
+        log_file.write_text("2026-10-21 19:00:00  earlier run: ok\n", encoding="utf-8")
+        with redirect_stdout(io.StringIO()):
+            app = self.gui.App(self.root)
+            self.spin(0.3)
+            self.assertIn("earlier run: ok", app.log_view.get("1.0", "end"))  # shown when the window opens
+            # the daily task is a separate program that appends to the same file
+            with open(log_file, "a", encoding="utf-8") as handle:
+                handle.write("2026-10-21 19:12:01  Range: ok (COMPLETED)\n")
+                handle.write("2026-10-21 19:12:01  Microwave: ok (COMPLETED)\n")
+            self.spin(0.5)
+        text = app.log_view.get("1.0", "end")
+        self.assertIn("Range: ok (COMPLETED)", text)
+        self.assertIn("Microwave: ok (COMPLETED)", text)
+        self.assertEqual(text.count("earlier run: ok"), 1)  # no duplicates
+
+    def test_half_written_line_waits_for_its_newline(self):
+        log_file = self.store.dir / "punctual.log"
+        log_file.parent.mkdir(parents=True, exist_ok=True)
+        log_file.write_text("", encoding="utf-8")
+        with redirect_stdout(io.StringIO()):
+            app = self.gui.App(self.root)
+            self.spin(0.2)
+            with open(log_file, "a", encoding="utf-8") as handle:
+                handle.write("2026-10-21 19:12:01  Range: o")
+            self.spin(0.3)
+            self.assertNotIn("Range: o", app.log_view.get("1.0", "end"))
+            with open(log_file, "a", encoding="utf-8") as handle:
+                handle.write("k\n")
+            self.spin(0.3)
+        self.assertIn("Range: ok", app.log_view.get("1.0", "end"))
 
     def test_bad_callback_does_not_kill_the_loop(self):
         with redirect_stdout(io.StringIO()):
