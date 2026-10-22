@@ -452,6 +452,30 @@ class WindowTests(StoreTestCase):
             self.spin(0.5)
             self.assertIn("still alive", app.log_view.get("1.0", "end"))
 
+    def test_schedule_buttons_follow_whether_it_is_on(self):
+        with redirect_stdout(io.StringIO()):
+            app = self.gui.App(self.root)
+            with mock.patch.object(punctual, "schedule_exists", return_value=False):
+                app.refresh_state()
+                self.spin(0.2)
+                self.assertEqual(app.schedule_button.cget("text"), "Turn on")
+                self.assertEqual(app.schedule_off_button.winfo_manager(), "")  # not shown
+
+            config = self.store.load_config()
+            config["schedule"] = {"time": "03:17"}
+            self.store.save_config(config)
+            with mock.patch.object(punctual, "schedule_exists", return_value=True):
+                app.refresh_state()
+                self.spin(0.2)
+                self.assertEqual(app.schedule_button.cget("text"), "Change time")
+                self.assertEqual(app.schedule_off_button.winfo_manager(), "pack")  # shown
+
+            with mock.patch.object(punctual, "schedule_exists", return_value=False):
+                app.refresh_state()
+                self.spin(0.2)
+                self.assertEqual(app.schedule_button.cget("text"), "Turn on")
+                self.assertEqual(app.schedule_off_button.winfo_manager(), "")  # hidden again
+
     def test_bad_callback_does_not_kill_the_loop(self):
         with redirect_stdout(io.StringIO()):
             app = self.gui.App(self.root)
