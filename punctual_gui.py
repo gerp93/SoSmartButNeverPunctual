@@ -106,7 +106,7 @@ class App:
         ttk.Entry(row, textvariable=self.time_var, width=7).pack(side="left", padx=6)
         self.schedule_button = ttk.Button(row, text="Turn on", command=self.schedule_on)
         self.schedule_button.pack(side="left")
-        ttk.Button(row, text="Turn off", command=self.schedule_off).pack(side="left", padx=4)
+        self.schedule_off_button = ttk.Button(row, text="Turn off", command=self.schedule_off)  # shown only while on
         self.schedule_text = tk.StringVar()
         ttk.Label(schedule, textvariable=self.schedule_text).pack(anchor="w", pady=(4, 0))
         how = "Windows Task Scheduler" if sys.platform == "win32" else "your crontab"
@@ -272,10 +272,13 @@ class App:
         self.schedule_on_now = bool(when and punctual.schedule_exists())
         if self.schedule_on_now:
             self.schedule_button.configure(text="Change time")
+            if not self.schedule_off_button.winfo_ismapped():
+                self.schedule_off_button.pack(side="left", padx=4)
             self.schedule_text.set(f"On: every day at {when}. There is only ever one daily task; "
                                    "Change time replaces it.")
         else:
             self.schedule_button.configure(text="Turn on")
+            self.schedule_off_button.pack_forget()
             self.schedule_text.set("Off.")
 
     # ----- 1. login -------------------------------------------------------
