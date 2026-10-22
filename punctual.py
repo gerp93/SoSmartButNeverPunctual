@@ -748,7 +748,8 @@ def schedule_install(store: Store, at: str = "03:17", jitter: int = 0, task_name
         script = (
             f"$a = New-ScheduledTaskAction -Execute '{quote(exe)}' -Argument '{quote(argument)}'; "
             f"$t = New-ScheduledTaskTrigger -Daily -At '{hour:02d}:{minute:02d}'; "
-            "$s = New-ScheduledTaskSettingsSet -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Hours 2); "
+            "$s = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries "
+            "-ExecutionTimeLimit (New-TimeSpan -Hours 2); "
             f"Register-ScheduledTask -TaskName '{quote(task_name)}' -Action $a -Trigger $t -Settings $s -Force | Out-Null"
         )
         result = _run(["powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script])
