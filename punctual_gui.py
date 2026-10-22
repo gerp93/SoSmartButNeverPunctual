@@ -103,7 +103,8 @@ class App:
         row.pack(fill="x")
         ttk.Label(row, text="Time (24-hour):").pack(side="left")
         self.time_var = tk.StringVar(value="03:17")
-        ttk.Entry(row, textvariable=self.time_var, width=7).pack(side="left", padx=6)
+        self.time_entry = ttk.Entry(row, textvariable=self.time_var, width=7)
+        self.time_entry.pack(side="left", padx=6)
         self.schedule_button = ttk.Button(row, text="Turn on", command=self.schedule_on)
         self.schedule_button.pack(side="left")
         self.schedule_off_button = ttk.Button(row, text="Turn off", command=self.schedule_off)  # shown only while on
@@ -132,6 +133,8 @@ class App:
         self.apply_saved_theme()
         self.refresh_state()
         self.pump()
+        self.root.after(self.REFRESH_MS, self.auto_refresh)
+        root.bind("<FocusIn>", self.on_focus)
         self.root.after(1500, self.check_for_updates)
         if not self.store.load_state_safe():
             self.root.after(500, self.open_connect)  # first run: start the setup right away
@@ -139,6 +142,19 @@ class App:
             self.refresh_devices()
 
     # ----- plumbing -------------------------------------------------------
+
+    REFRESH_MS = 30_000
+
+    def auto_refresh(self) -> None:
+        """Pick up runs made by the daily task, which happen outside this window."""
+        try:
+            self.refresh_state()
+        finally:
+            self.root.after(self.REFRESH_MS, self.auto_refresh)
+
+    def on_focus(self, event=None) -> None:
+        if event is None or event.widget is self.root:  # the window itself got focus, not a child
+            self.refresh_state()
 
     def pump(self) -> None:
         try:
@@ -267,7 +283,7 @@ class App:
         self.last_sync_text.set(
             f"Last sync {last['at']}: {'ok' if last['ok'] else 'FAILED'}\n{last['summary']}" if last else "Not synced yet.")
         when = config.get("schedule", {}).get("time")
-        if when:
+        if when and self.root.focus_get() is not self.time_entry:  # never overwrite a time being typed
             self.time_var.set(when)
         self.schedule_on_now = bool(when and punctual.schedule_exists())
         if self.schedule_on_now:
