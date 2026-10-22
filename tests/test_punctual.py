@@ -476,6 +476,30 @@ class WindowTests(StoreTestCase):
                 self.assertEqual(app.schedule_button.cget("text"), "Turn on")
                 self.assertEqual(app.schedule_off_button.winfo_manager(), "")  # hidden again
 
+    def test_window_picks_up_a_run_made_by_the_daily_task_without_any_click(self):
+        with mock.patch.object(self.gui.App, "REFRESH_MS", 100), redirect_stdout(io.StringIO()):
+            app = self.gui.App(self.root)
+            self.spin(0.3)
+            self.assertIn("Not synced yet", app.last_sync_text.get())
+            # the scheduled task runs outside the window and records its result in the settings file
+            config = self.store.load_config()
+            config["last_sync"] = {"at": "2026-10-21 19:02:01", "ok": True, "summary": "set 19:02: Range, Microwave"}
+            self.store.save_config(config)
+            self.spin(0.6)
+        self.assertIn("19:02:01", app.last_sync_text.get())
+
+    def test_refresh_does_not_overwrite_a_time_being_typed(self):
+        with mock.patch.object(self.gui.App, "REFRESH_MS", 100), redirect_stdout(io.StringIO()):
+            app = self.gui.App(self.root)
+            config = self.store.load_config()
+            config["schedule"] = {"time": "03:17"}
+            self.store.save_config(config)
+            app.time_entry.focus_force()
+            app.time_var.set("21:45")  # the user is editing
+            with mock.patch.object(app.root, "focus_get", return_value=app.time_entry):
+                self.spin(0.5)
+            self.assertEqual(app.time_var.get(), "21:45")
+
     def test_bad_callback_does_not_kill_the_loop(self):
         with redirect_stdout(io.StringIO()):
             app = self.gui.App(self.root)
