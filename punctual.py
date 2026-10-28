@@ -577,14 +577,19 @@ def authorize(store: Store, client_id: str, client_secret: str, redirect_uri: st
 
 def cmd_setup(store: Store, args) -> int:
     print("Authorize this script with your SmartThings OAuth-In app (see README, step 1).\n")
-    if args.token:
-        print("Creating your SmartThings app with the token you gave ...")
-        client_id, client_secret = create_oauth_app(args.token, args.redirect_uri or DEFAULT_REDIRECT_URI, args.scope)
+    if args.token is not None:  # --token with no value asks for it with a hidden prompt (keeps it out of shell history)
+        token = args.token or getpass.getpass("SmartThings token (hidden): ").strip()
+        if not token:
+            raise PunctualError("no token entered")
+        redirect_uri = args.redirect_uri or DEFAULT_REDIRECT_URI
+        print("Creating your SmartThings app with that token ...")
+        client_id, client_secret = create_oauth_app(token, redirect_uri, args.scope)
     else:
         client_id = args.client_id or input("Client ID: ").strip()
         client_secret = args.client_secret or getpass.getpass("Client secret (hidden): ").strip()
-    redirect_uri = args.redirect_uri or input(f"Redirect URI you registered [{DEFAULT_REDIRECT_URI}]: ").strip() \
-        or DEFAULT_REDIRECT_URI
+        redirect_uri = (args.redirect_uri
+                        or input(f"Redirect URI you registered [{DEFAULT_REDIRECT_URI}]: ").strip()
+                        or DEFAULT_REDIRECT_URI)
     authorize(store, client_id, client_secret, redirect_uri, args.scope,
               ask_pasted=lambda prompt: input(f"\n{prompt}\n\nRedirected URL (or just the code): "),
               force_paste=args.paste, notify=print)
@@ -836,8 +841,9 @@ def build_parser() -> argparse.ArgumentParser:
     setup = sub.add_parser("setup", help="one-time login with your SmartThings OAuth-In app")
     setup.add_argument("--client-id")
     setup.add_argument("--client-secret", help="prefer the hidden prompt over passing this on the command line")
-    setup.add_argument("--token", help="a short-lived SmartThings personal access token; creates the OAuth app for you "
-                                       "(instead of --client-id/--client-secret)")
+    setup.add_argument("--token", nargs="?", const="", metavar="TOKEN",
+                       help="a short-lived SmartThings personal access token; creates the OAuth app for you "
+                            "(instead of --client-id/--client-secret). Give no value to be asked for it (hidden)")
     setup.add_argument("--redirect-uri")
     setup.add_argument("--scope", default=DEFAULT_SCOPE)
     setup.add_argument("--paste", action="store_true", help="paste the redirected URL instead of listening on localhost")

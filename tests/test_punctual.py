@@ -547,6 +547,38 @@ class WindowTests(StoreTestCase):
         self.assertIn("after the crash", app.log_view.get("1.0", "end"))
 
 
+class SetupCommandTests(StoreTestCase):
+    def run_setup(self, argv):
+        args = punctual.build_parser().parse_args(["setup"] + argv)
+        with mock.patch.object(punctual, "create_oauth_app", return_value=("cid", "sec")) as create, \
+                mock.patch.object(punctual, "authorize") as authorize, redirect_stdout(io.StringIO()):
+            code = punctual.cmd_setup(self.store, args)
+        return code, create, authorize
+
+    def test_token_without_a_value_asks_with_a_hidden_prompt(self):
+        with mock.patch.object(punctual.getpass, "getpass", return_value=" typed-token ") as ask:
+            code, create, authorize = self.run_setup(["--token"])
+        self.assertEqual(code, 0)
+        ask.assert_called_once()
+        self.assertEqual(create.call_args[0][0], "typed-token")
+        self.assertEqual(authorize.call_args[0][1:4], ("cid", "sec", punctual.DEFAULT_REDIRECT_URI))
+
+    def test_token_with_a_value_does_not_prompt(self):
+        with mock.patch.object(punctual.getpass, "getpass") as ask:
+            _, create, _ = self.run_setup(["--token", "given-token"])
+        ask.assert_not_called()
+        self.assertEqual(create.call_args[0][0], "given-token")
+
+    def test_empty_hidden_token_is_an_error(self):
+        with mock.patch.object(punctual.getpass, "getpass", return_value="   "):
+            with self.assertRaises(punctual.PunctualError):
+                self.run_setup(["--token"])
+
+    def test_token_path_never_asks_for_the_redirect_address(self):
+        with mock.patch("builtins.input", side_effect=AssertionError("asked for the redirect")):
+            self.run_setup(["--token", "given-token"])
+
+
 class ParsingTests(unittest.TestCase):
     def test_parse_full_url(self):
         code, state, error = punctual.parse_redirect("https://x.example/cb?code=abc123&state=s1")
