@@ -75,7 +75,11 @@ system `python3` and installs the `punctual` command. Upgrade with `sudo apt ins
 with `sudo apt remove sosmartbutneverpunctual` (your login and settings in `~/.config` are kept). On a
 server with no browser, forward the sign-in port from your PC (`ssh -L 8123:localhost:8123 you@server`),
 open the link `setup` prints in your PC's browser, and click Allow. Only one machine can hold the login
-at a time: setting up a second one replaces the first's, so keep the schedule on one machine.
+at a time per computer, but several computers can each have their own: setup registers a SmartThings
+app named for the computer ("SoSmartButNeverPunctual (your-pc)"), so connecting the desktop app on your PC
+never signs the server out. Keep the daily schedule on one machine (the always-on server).
+
+To force a sync on the server from another computer, without logging in to it: `ssh you@server punctual sync`.
 
 The builds are unsigned, so Windows SmartScreen and macOS Gatekeeper warn about an
 unrecognized publisher on first run. Click through ("More info", then "Run anyway" on

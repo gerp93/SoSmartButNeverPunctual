@@ -26,6 +26,7 @@ import random
 import re
 import secrets
 import shlex
+import socket
 import shutil
 import subprocess
 import sys
@@ -452,6 +453,17 @@ DEFAULT_REDIRECT_URI = "http://localhost:8123/callback"
 APP_DISPLAY_NAME = "SoSmartButNeverPunctual"
 
 
+def machine_app_name() -> str:
+    """The SmartThings app this computer registers: one app per machine.
+
+    A login belongs to one SmartThings app, and issuing new credentials for an app (what setup does)
+    cuts off every login made with the old ones. Sharing one app between two computers would
+    therefore break the first when the second connects, so each computer gets its own.
+    """
+    host = re.sub(r"[^A-Za-z0-9._-]+", "-", socket.gethostname()).strip("-")[:40] or "computer"
+    return f"{APP_DISPLAY_NAME} ({host})"
+
+
 def create_oauth_app(token: str, redirect_uri: str = DEFAULT_REDIRECT_URI, scope: str = DEFAULT_SCOPE):
     """Create the user's own OAuth-In app with a short-lived personal access token.
 
@@ -461,10 +473,11 @@ def create_oauth_app(token: str, redirect_uri: str = DEFAULT_REDIRECT_URI, scope
     """
     headers = {"Authorization": f"Bearer {token.strip()}", "Accept": "application/json",
                "Content-Type": "application/json"}
-    oauth_request = {"clientName": APP_DISPLAY_NAME, "scope": scope.split(), "redirectUris": [redirect_uri]}
+    app_name = machine_app_name()
+    oauth_request = {"clientName": app_name, "scope": scope.split(), "redirectUris": [redirect_uri]}
     app_request = {
         "appName": f"sosmart-{uuid.uuid4().hex[:16]}",
-        "displayName": APP_DISPLAY_NAME,
+        "displayName": app_name,
         "description": "Keeps appliance clocks in sync",
         "singleInstance": True,
         "appType": "API_ONLY",
@@ -472,11 +485,13 @@ def create_oauth_app(token: str, redirect_uri: str = DEFAULT_REDIRECT_URI, scope
         "apiOnly": {},
         "oauth": oauth_request,
     }
-    # Retrying Connect must not pile up apps in the user's account: reuse ours if it is already there.
+    # Retrying Connect must not pile up apps in the user's account: reuse THIS computer's app if it is
+    # already there. Another computer's app (or the old shared name) is never reused: that would
+    # regenerate its credentials and break that computer's login.
     status, listing = http("GET", f"{API_URL}/apps", headers=headers)
     existing = next((item["appId"] for item in (listing.get("items") or [])
                      if status == 200 and isinstance(listing, dict) and item.get("appId")
-                     and item.get("displayName") == APP_DISPLAY_NAME and item.get("appType") == "API_ONLY"), None)
+                     and item.get("displayName") == app_name and item.get("appType") == "API_ONLY"), None)
     if existing:
         status, data = http("POST", f"{API_URL}/apps/{existing}/oauth/generate", headers=headers,
                             body=json.dumps(oauth_request).encode())
