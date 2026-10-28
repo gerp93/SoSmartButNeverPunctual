@@ -6,6 +6,10 @@ appliance clocks in sync via the SmartThings API, plus a bare-bones Tkinter wind
 
 - `punctual.py` must stay standalone: it must never import `punctual_gui` or
   `tkinter`, so people can download that one file and run it headless.
+- The Debian package (`release-deb.yml` from KVG_Standards, wired in `auto-release.yml`/`cut-release.yml`)
+  installs **only `punctual.py`** plus `_version.py`. So `punctual.py` must never import another file from
+  this repo or a third-party package. A new runtime file would have to be added to `install_files` in both
+  workflows, and the workflow's smoke test (installed command must report the tag's version) is the drift guard.
 - Runs on Windows, macOS and Linux. Scheduling is Task Scheduler on Windows and
   crontab elsewhere.
 

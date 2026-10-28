@@ -62,3 +62,18 @@ jobs:
       icon_path: 'assets/icon'
     permissions:
       contents: write
+
+  # Debian package (KVG_Standards deb-packaging.md): same file, tag and release as the desktop build.
+  deb:
+    needs: [tag, release]
+    uses: gerp93/KVG_Standards/.github/workflows/release-deb.yml@main
+    with:
+      version: ${{ needs.tag.outputs.version }}
+      package_name: sosmartbutneverpunctual
+      command_name: punctual
+      entry_point: punctual.py
+      install_files: punctual.py
+      description: Keep Samsung appliance clocks in sync through SmartThings
+      version_file: _version.py
+    permissions:
+      contents: write

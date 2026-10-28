@@ -31,6 +31,8 @@ and this repo's `REPO_SCOPE.md` entry for that). Just what's not built yet.
 
 ## Needs real-world verification
 
+- The `.deb` end to end on a real Debian server (CI verifies build, install, version and removal on an Ubuntu
+  runner): install it, run `setup` with the SSH-forwarded sign-in, `schedule`, and a scheduled run.
 - The first real release build: PyInstaller exe on all three OSes, the Windows `Setup.exe`,
   the update check against a published release, and the scheduled task running the packaged
   exe (`SoSmartButNeverPunctual.exe sync`) with no window.
