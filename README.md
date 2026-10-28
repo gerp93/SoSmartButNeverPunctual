@@ -109,10 +109,10 @@ Each person uses their own app, so nobody shares credentials.
 
 **Shortcut (experimental): let the script create it.** Create a personal access
 token at <https://account.smartthings.com/tokens> (any name; tick the Apps and
-Devices permissions), then use it once:
+Devices permissions), then run this and paste the token when it asks (it is hidden, so it stays out of your shell history):
 
 ```
-python punctual.py setup --token <the-token>
+python punctual.py setup --token
 ```
 
 That creates the app, logs in and discards the token, so you can skip the rest of
