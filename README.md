@@ -49,6 +49,7 @@ away right after, and the app does not keep it. Only appliances' clocks are touc
 | **Installer** (easiest) | Download from the [Releases page](https://github.com/gerp93/SoSmartButNeverPunctual/releases): `SoSmartButNeverPunctual-windows-Setup.exe` (Start Menu shortcut, uninstaller), or the portable `-windows.exe`, `-macos` or `-linux` build | Nothing else. Python is bundled |
 | **Window from source** | `python punctual_gui.py` | Python 3.9+ with Tkinter. For the theme and update check: `pip install -r requirements.txt` |
 | **Script only** (terminal, servers, cron) | Download just `punctual.py` | Python 3.9+, nothing else |
+| **Debian / Ubuntu package** (servers) | `sosmartbutneverpunctual_<version>_all.deb` from the Releases page; see below | Debian/Ubuntu with Python 3.9+ (the system `python3`) |
 
 All three do the same thing and share the same saved login and settings, so you
 can switch between them. `punctual.py` never needs the window files.
@@ -57,6 +58,24 @@ can switch between them. `punctual.py` never needs the window files.
 installer asks for admin). The "Update to vX" button can only replace the installed app when the
 app was started with "Run as administrator". Otherwise just download the newest `Setup.exe`
 from the Releases page and run it over the top; your login and settings are kept.
+
+**Debian / Ubuntu (a server or Raspberry Pi):** download the `.deb` from the
+[Releases page](https://github.com/gerp93/SoSmartButNeverPunctual/releases/latest), then:
+
+```
+sudo apt install ./sosmartbutneverpunctual_<version>_all.deb
+punctual setup --token      # one-time login; paste the token when asked (hidden)
+punctual select             # pick the appliances
+punctual schedule --at 03:17
+```
+
+The package is built in the same release run, from the same `punctual.py`, as the desktop app, and CI
+installs it and checks it reports that release's version, so the two cannot drift apart. It uses the
+system `python3` and installs the `punctual` command. Upgrade with `sudo apt install ./newer.deb`; remove
+with `sudo apt remove sosmartbutneverpunctual` (your login and settings in `~/.config` are kept). On a
+server with no browser, forward the sign-in port from your PC (`ssh -L 8123:localhost:8123 you@server`),
+open the link `setup` prints in your PC's browser, and click Allow. Only one machine can hold the login
+at a time: setting up a second one replaces the first's, so keep the schedule on one machine.
 
 The builds are unsigned, so Windows SmartScreen and macOS Gatekeeper warn about an
 unrecognized publisher on first run. Click through ("More info", then "Run anyway" on
