@@ -250,7 +250,7 @@ class CreateAppTests(unittest.TestCase):
         self.assertEqual(body["oauth"]["redirectUris"], [punctual.DEFAULT_REDIRECT_URI])
 
     def test_reuses_the_existing_app_instead_of_creating_another(self):
-        ours = {"appId": "app-9", "displayName": punctual.APP_DISPLAY_NAME, "appType": "API_ONLY"}
+        ours = {"appId": "app-9", "displayName": punctual.machine_app_name(), "appType": "API_ONLY"}
         other = {"appId": "app-2", "displayName": "Something else", "appType": "API_ONLY"}
         replies = [(200, {"items": [other, ours]}), (200, {"oauthClientId": "cid", "oauthClientSecret": "sec"})]
         with mock.patch.object(punctual, "http", side_effect=replies) as fake:
@@ -258,8 +258,26 @@ class CreateAppTests(unittest.TestCase):
         self.assertEqual(fake.call_args[0], ("POST", f"{punctual.API_URL}/apps/app-9/oauth/generate"))
         self.assertEqual(fake.call_count, 2)  # list + generate; never POST /apps
 
+    def test_each_computer_gets_its_own_app_and_never_reuses_anothers(self):
+        """Regression: a shared app meant the server's login wiped out the PC's."""
+        server = {"appId": "app-server", "displayName": f"{punctual.APP_DISPLAY_NAME} (kvguzzler-debian)", "appType": "API_ONLY"}
+        legacy = {"appId": "app-legacy", "displayName": punctual.APP_DISPLAY_NAME, "appType": "API_ONLY"}
+        created = (200, {"app": {"appId": "app-pc"}, "oauthClientId": "cid", "oauthClientSecret": "sec"})
+        with mock.patch.object(punctual.socket, "gethostname", return_value="DESKTOP-1"),                 mock.patch.object(punctual, "http", side_effect=[(200, {"items": [server, legacy]}), created]) as fake:
+            self.assertEqual(punctual.create_oauth_app("token"), ("cid", "sec"))
+        self.assertEqual(fake.call_args[0], ("POST", f"{punctual.API_URL}/apps"))  # created its own, no generate call
+        body = json.loads(fake.call_args[1]["body"])
+        self.assertEqual(body["displayName"], f"{punctual.APP_DISPLAY_NAME} (DESKTOP-1)")
+        self.assertEqual(body["oauth"]["clientName"], f"{punctual.APP_DISPLAY_NAME} (DESKTOP-1)")
+
+    def test_machine_name_is_cleaned_up(self):
+        with mock.patch.object(punctual.socket, "gethostname", return_value="my pc / 2!"):
+            self.assertEqual(punctual.machine_app_name(), f"{punctual.APP_DISPLAY_NAME} (my-pc-2)")
+        with mock.patch.object(punctual.socket, "gethostname", return_value=""):
+            self.assertEqual(punctual.machine_app_name(), f"{punctual.APP_DISPLAY_NAME} (computer)")
+
     def test_existing_app_that_cannot_issue_credentials_is_an_error_not_a_second_app(self):
-        ours = {"appId": "app-9", "displayName": punctual.APP_DISPLAY_NAME, "appType": "API_ONLY"}
+        ours = {"appId": "app-9", "displayName": punctual.machine_app_name(), "appType": "API_ONLY"}
         with mock.patch.object(punctual, "http", side_effect=[(200, {"items": [ours]}), (500, {})]) as fake:
             with self.assertRaises(punctual.PunctualError):
                 punctual.create_oauth_app("token")
